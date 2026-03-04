@@ -278,7 +278,9 @@ output "master_public_ip"   { value = aws_instance.master.public_ip }
 output "master_private_ip"  { value = aws_instance.master.private_ip }
 output "node1_private_ip"   { value = aws_instance.node1.private_ip }
 output "node2_private_ip"   { value = aws_instance.node2.private_ip }
-output "private_key_s3_path" { value = "s3://${var.tf_state_bucket}/keys/${var.key_pair_name}.pem" }
+output "private_key_s3_path" { value = "s3://${var.tf_state_bucket}/keys/${var.key_pair_name}.pem"
+  sensitive = false
+}
 output "private_key_path"   { value = local_sensitive_file.private_key.filename }
 output "ubuntu_ami_id"      { value = data.aws_ami.ubuntu.id }
 output "ubuntu_ami_name"    { value = data.aws_ami.ubuntu.name }
