@@ -79,6 +79,7 @@ jobs:
           terraform plan \
             -var="training_prefix=grant-tam" \
             -var="customer_ip=${{ secrets.CUSTOMER_IP }}" \
+            -var="tf_state_bucket=${{ secrets.TF_STATE_BUCKET }}" \
             -var="github_repo=https://raw.githubusercontent.com/${{ github.repository }}/main" \
             -out=tfplan \
             -no-color 2>&1 | tee plan_output.txt
@@ -139,6 +140,7 @@ jobs:
           terraform destroy -auto-approve \
             -var="training_prefix=grant-tam" \
             -var="customer_ip=${{ secrets.CUSTOMER_IP }}" \
+            -var="tf_state_bucket=${{ secrets.TF_STATE_BUCKET }}" \
             -var="github_repo=https://raw.githubusercontent.com/${{ github.repository }}/main"
 
       - name: Output cluster info

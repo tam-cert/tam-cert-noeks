@@ -29,6 +29,7 @@ variable "node2_ip"         { default = "172.49.20.232" }
 variable "training_prefix"  { default = "grant-tam" }
 variable "customer_ip"      { default = "136.25.0.29/32" }
 variable "key_pair_name"    { default = "grant-tam-key" }
+variable "tf_state_bucket"  { description = "S3 bucket used for Terraform state and key storage" }
 variable "github_repo"      { default = "https://raw.githubusercontent.com/<your-org>/tam-cert-noeks/main" }
 
 # ─── SSH Key Pair ─────────────────────────────────────────────────────────────
@@ -277,6 +278,7 @@ output "master_public_ip"   { value = aws_instance.master.public_ip }
 output "master_private_ip"  { value = aws_instance.master.private_ip }
 output "node1_private_ip"   { value = aws_instance.node1.private_ip }
 output "node2_private_ip"   { value = aws_instance.node2.private_ip }
+output "private_key_s3_path" { value = "s3://${var.tf_state_bucket}/keys/${var.key_pair_name}.pem" }
 output "private_key_path"   { value = local_sensitive_file.private_key.filename }
 output "ubuntu_ami_id"      { value = data.aws_ami.ubuntu.id }
 output "ubuntu_ami_name"    { value = data.aws_ami.ubuntu.name }
