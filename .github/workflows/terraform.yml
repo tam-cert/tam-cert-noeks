@@ -40,7 +40,7 @@ jobs:
       run:
         working-directory: ${{ env.TF_WORKING_DIR }}
 
-    environment: ${{ (github.event.inputs.action == 'apply' || github.ref == 'refs/heads/main') && 'production' || '' }}
+    environment: ${{ (github.event.inputs.action == 'apply' || github.event.inputs.action == 'destroy' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && 'production' || '' }}
 
     steps:
       - name: Checkout
@@ -82,7 +82,6 @@ jobs:
             -var="github_repo=https://raw.githubusercontent.com/${{ github.repository }}/main" \
             -out=tfplan \
             -no-color 2>&1 | tee plan_output.txt
-        continue-on-error: true
 
       - name: Post Plan to PR
         if: github.event_name == 'pull_request'
@@ -127,10 +126,6 @@ jobs:
               issue_number: context.issue.number,
               body,
             });
-
-      - name: Fail if Plan errored
-        if: steps.plan.outcome == 'failure'
-        run: exit 1
 
       - name: Terraform Apply
         if: |
