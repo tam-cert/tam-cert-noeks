@@ -208,6 +208,12 @@ locals {
 
 # ─── EC2 Instances ────────────────────────────────────────────────────────────
 
+locals {
+  common_tags = {
+    instance_metadata_tagging_req = "grant.voss@goteleport.com"
+  }
+}
+
 resource "aws_instance" "master" {
   ami                    = data.aws_ami.ubuntu.id
   instance_type          = "t2.small"
@@ -218,10 +224,13 @@ resource "aws_instance" "master" {
   private_ip             = var.master_ip
   user_data              = local.master_userdata
 
-  tags = {
-    Name                          = "${var.training_prefix}-master"
-    instance_metadata_tagging_req = "grant.voss@goteleport.com"
-  }
+  tags = merge(local.common_tags, {
+    Name = "${var.training_prefix}-master"
+  })
+
+  volume_tags = merge(local.common_tags, {
+    Name = "${var.training_prefix}-master-volume"
+  })
 }
 
 resource "aws_instance" "node1" {
@@ -234,10 +243,13 @@ resource "aws_instance" "node1" {
   private_ip             = var.node1_ip
   user_data              = local.worker_userdata
 
-  tags = {
-    Name                          = "${var.training_prefix}-node1"
-    instance_metadata_tagging_req = "grant.voss@goteleport.com"
-  }
+  tags = merge(local.common_tags, {
+    Name = "${var.training_prefix}-node1"
+  })
+
+  volume_tags = merge(local.common_tags, {
+    Name = "${var.training_prefix}-node1-volume"
+  })
 }
 
 resource "aws_instance" "node2" {
@@ -250,10 +262,13 @@ resource "aws_instance" "node2" {
   private_ip             = var.node2_ip
   user_data              = local.worker_userdata
 
-  tags = {
-    Name                          = "${var.training_prefix}-node2"
-    instance_metadata_tagging_req = "grant.voss@goteleport.com"
-  }
+  tags = merge(local.common_tags, {
+    Name = "${var.training_prefix}-node2"
+  })
+
+  volume_tags = merge(local.common_tags, {
+    Name = "${var.training_prefix}-node2-volume"
+  })
 }
 
 # ─── Outputs ──────────────────────────────────────────────────────────────────
