@@ -250,7 +250,13 @@ locals {
     }
 
     apt_install update
-    apt_install install -y apt-transport-https ca-certificates curl gnupg ansible python3 awscli
+    apt_install install -y apt-transport-https ca-certificates curl gnupg ansible python3 unzip
+
+    # Install AWS CLI v2 from official installer
+    curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip
+    unzip -q /tmp/awscliv2.zip -d /tmp
+    /tmp/aws/install
+    rm -rf /tmp/awscliv2.zip /tmp/aws
 
     # ── Write environment vars file ──────────────────────────────────────────
     cat <<EOF > /home/ubuntu/.teleport-env
