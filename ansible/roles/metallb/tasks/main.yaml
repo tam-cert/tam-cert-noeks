@@ -35,13 +35,6 @@
     KUBECONFIG: /home/ubuntu/.kube/config
   changed_when: false
 
-- name: Get master node public IP
-  ansible.builtin.shell:
-    cmd: |
-      curl -fsSL --max-time 5 http://169.254.169.254/latest/meta-data/public-ipv4
-  register: master_public_ip
-  changed_when: false
-
 - name: Apply MetalLB IP address pool
   ansible.builtin.command:
     cmd: kubectl apply -f -
@@ -53,7 +46,7 @@
         namespace: metallb-system
       spec:
         addresses:
-          - {{ master_public_ip.stdout }}/32
+          - 172.49.20.100-172.49.20.150
   environment:
     KUBECONFIG: /home/ubuntu/.kube/config
   changed_when: true
