@@ -272,6 +272,7 @@ locals {
     sudo -u ubuntu ansible-playbook "$ANSIBLE_DIR/k8s-setup.yaml"   -i "$ANSIBLE_DIR/hosts" --become
     sudo -u ubuntu ansible-playbook "$ANSIBLE_DIR/k8s-master.yaml"  -i "$ANSIBLE_DIR/hosts" --become
     sudo -u ubuntu ansible-playbook "$ANSIBLE_DIR/k8s-workers.yaml" -i "$ANSIBLE_DIR/hosts" --become
+    sudo -u ubuntu ansible-playbook "$ANSIBLE_DIR/teleport.yaml"    -i "$ANSIBLE_DIR/hosts" --become
   EOT
 
   # ─── cloud-init: Workers ────────────────────────────────────────────────────
