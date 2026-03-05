@@ -21,21 +21,21 @@ provider "aws" {
 
 # ─── Variables ────────────────────────────────────────────────────────────────
 
-variable "vpc_cidr"         { default = "172.49.0.0/16" }
-variable "subnet_cidr"      { default = "172.49.20.0/24" }
-variable "master_ip"        { default = "172.49.20.230" }
-variable "node1_ip"         { default = "172.49.20.231" }
-variable "node2_ip"         { default = "172.49.20.232" }
-variable "training_prefix"  { default = "grant-tam" }
-variable "customer_ip"      { default = "136.25.0.29/32" }
-variable "instance_type"    { default = "t3.medium" } # 2 vCPU, 4GB RAM
-variable "key_pair_name"    { default = "grant-tam-key" }
-variable "tf_state_bucket"  { description = "S3 bucket used for Terraform state" }
+variable "vpc_cidr"        { default = "172.49.0.0/16" }
+variable "subnet_cidr"     { default = "172.49.20.0/24" }
+variable "master_ip"       { default = "172.49.20.230" }
+variable "node1_ip"        { default = "172.49.20.231" }
+variable "node2_ip"        { default = "172.49.20.232" }
+variable "training_prefix" { default = "grant-tam" }
+variable "customer_ip"     { default = "136.25.0.29/32" }
+variable "instance_type"   { default = "t3.medium" } # 2 vCPU, 4GB RAM
+variable "key_pair_name"   { default = "grant-tam-key" }
+variable "tf_state_bucket" { description = "S3 bucket used for Terraform state" }
+variable "github_repo"     { default = "https://raw.githubusercontent.com/tam-cert/tam-cert-noeks/main" }
 variable "db_password" {
   description = "Master password for RDS PostgreSQL instance"
   sensitive   = true
 }
-variable "github_repo"      { default = "https://raw.githubusercontent.com/tam-cert/tam-cert-noeks/main" }
 
 # ─── IAM Role for EC2 instances ──────────────────────────────────────────────
 
@@ -117,7 +117,7 @@ data "aws_ami" "ubuntu" {
 
 resource "aws_vpc" "main" {
   cidr_block = var.vpc_cidr
-  tags = { Name = "${var.training_prefix}-vpc1" }
+  tags       = { Name = "${var.training_prefix}-vpc1" }
 }
 
 resource "aws_subnet" "main" {
@@ -125,7 +125,7 @@ resource "aws_subnet" "main" {
   cidr_block              = var.subnet_cidr
   availability_zone       = "us-west-2a"
   map_public_ip_on_launch = true
-  tags = { Name = "${var.training_prefix}-subnet-1" }
+  tags                    = { Name = "${var.training_prefix}-subnet-1" }
 }
 
 resource "aws_internet_gateway" "main" {
@@ -190,13 +190,16 @@ locals {
   }
 
   # ─── cloud-init: Master ─────────────────────────────────────────────────────
-  # Bootstraps the minimum needed to run Ansible.
-  # Ansible owns all containerd, Kubernetes, and cluster setup.
+  # Bootstraps minimum deps, writes env file, pulls Ansible from GitHub,
+  # runs all playbooks including Teleport deployment.
 
   master_userdata = <<-EOT
     #!/bin/bash
     set -euo pipefail
     exec > >(tee /var/log/cloud-init-k8s.log) 2>&1
+
+    # ── Prevent interactive prompts ──────────────────────────────────────────
+    export DEBIAN_FRONTEND=noninteractive
 
     # ── Wait for apt lock released by unattended-upgrades ────────────────────
     systemctl disable --now unattended-upgrades || true
@@ -205,11 +208,9 @@ locals {
     systemctl kill --kill-who=all apt-daily.service || true
     systemctl kill --kill-who=all apt-daily-upgrade.service || true
 
-    # Wait using systemd-run to block until dpkg is available
     systemd-run --property="After=apt-daily.service apt-daily-upgrade.service" \
       --wait /bin/true 2>/dev/null || true
 
-    # Belt-and-suspenders: poll all lock files
     while fuser /var/lib/dpkg/lock-frontend \
                 /var/lib/apt/lists/lock \
                 /var/lib/dpkg/lock \
@@ -217,7 +218,10 @@ locals {
       echo "Waiting for apt lock..."
       sleep 5
     done
-    sleep 10
+
+    # Repair any interrupted dpkg operations
+    dpkg --configure -a || true
+    sleep 5
 
     # ── Kernel modules & sysctl ──────────────────────────────────────────────
     modprobe overlay
@@ -236,8 +240,26 @@ locals {
     sysctl --system
 
     # ── Minimal dependencies for Ansible ────────────────────────────────────
-    apt-get update
-    apt-get install -y apt-transport-https ca-certificates curl gnupg ansible python3
+    apt_install() {
+      for i in 1 2 3 4 5; do
+        apt-get "$@" && return 0
+        echo "apt-get failed (attempt $i), retrying in 15s..."
+        sleep 15
+      done
+      return 1
+    }
+
+    apt_install update
+    apt_install install -y apt-transport-https ca-certificates curl gnupg ansible python3 awscli
+
+    # ── Write environment vars file ──────────────────────────────────────────
+    cat <<EOF > /home/ubuntu/.teleport-env
+    export RDS_ADDRESS="${aws_db_instance.teleport.address}"
+    export DB_SECRET_NAME="${aws_secretsmanager_secret.db_password.name}"
+    EOF
+    chmod 600 /home/ubuntu/.teleport-env
+    chown ubuntu:ubuntu /home/ubuntu/.teleport-env
+    echo "source ~/.teleport-env" >> /home/ubuntu/.bashrc
 
     # ── SSH private key for Ansible ──────────────────────────────────────────
     mkdir -p /home/ubuntu/.ssh
@@ -272,7 +294,9 @@ locals {
       "roles/k8s-setup/tasks/main.yaml" \
       "roles/k8s-setup/defaults/main.yaml" \
       "roles/k8s-master/tasks/main.yaml" \
-      "roles/k8s-workers/tasks/main.yaml"; do
+      "roles/k8s-workers/tasks/main.yaml" \
+      "roles/teleport/tasks/main.yaml" \
+      "roles/teleport/templates/teleport-values.yaml.j2"; do
       echo "Fetching ansible/$role_file..."
       curl -fsSL "$REPO/ansible/$role_file" -o "$ANSIBLE_DIR/$role_file" || { echo "ERROR: failed to fetch $role_file"; exit 1; }
     done
@@ -288,12 +312,15 @@ locals {
   EOT
 
   # ─── cloud-init: Workers ────────────────────────────────────────────────────
-  # Bootstraps kernel params only. Ansible handles everything else.
+  # Sets kernel params only. Ansible handles everything else.
 
   worker_userdata = <<-EOT
     #!/bin/bash
     set -euo pipefail
     exec > >(tee /var/log/cloud-init-k8s.log) 2>&1
+
+    # ── Prevent interactive prompts ──────────────────────────────────────────
+    export DEBIAN_FRONTEND=noninteractive
 
     # ── Wait for apt lock released by unattended-upgrades ────────────────────
     systemctl disable --now unattended-upgrades || true
@@ -312,7 +339,9 @@ locals {
       echo "Waiting for apt lock..."
       sleep 5
     done
-    sleep 10
+
+    dpkg --configure -a || true
+    sleep 5
 
     # ── Kernel modules & sysctl ──────────────────────────────────────────────
     modprobe overlay
