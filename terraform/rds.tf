@@ -56,12 +56,6 @@ resource "aws_db_parameter_group" "main" {
   description = "Parameter group for Teleport PostgreSQL 17"
 
   parameter {
-    name         = "wal_level"
-    value        = "logical"
-    apply_method = "pending-reboot"
-  }
-
-  parameter {
     name         = "rds.logical_replication"
     value        = "1"
     apply_method = "pending-reboot"
