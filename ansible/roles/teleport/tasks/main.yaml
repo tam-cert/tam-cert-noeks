@@ -2,6 +2,7 @@
 - name: Source environment vars file
   ansible.builtin.shell:
     cmd: source /home/ubuntu/.teleport-env && env
+    executable: /bin/bash
   register: env_vars
   changed_when: false
 
