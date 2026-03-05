@@ -21,6 +21,7 @@ auth:
         conn_string: "postgresql://teleport:{{ db_password }}@{{ rds_address }}:5432/teleport_backend?sslmode=require&pool_max_conns=20"
         audit_events_uri:
           - "postgresql://teleport:{{ db_password }}@{{ rds_address }}:5432/teleport_audit?sslmode=require"
+        audit_sessions_uri: "s3://{{ sessions_bucket }}/sessions?region=us-west-2"
 
 proxy:
   teleportConfig:

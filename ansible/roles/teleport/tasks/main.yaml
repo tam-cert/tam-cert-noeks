@@ -14,6 +14,10 @@
   ansible.builtin.set_fact:
     db_secret_name: "{{ env_vars.stdout | regex_search('DB_SECRET_NAME=(.+)', '\\1') | first }}"
 
+- name: Set sessions bucket fact from env file
+  ansible.builtin.set_fact:
+    sessions_bucket: "{{ env_vars.stdout | regex_search('SESSIONS_BUCKET=(.+)', '\\1') | first }}"
+
 - name: Fetch DB password from AWS Secrets Manager
   ansible.builtin.command:
     cmd: aws secretsmanager get-secret-value --secret-id {{ db_secret_name }} --region us-west-2 --query SecretString --output text

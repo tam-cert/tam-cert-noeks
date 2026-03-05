@@ -262,6 +262,7 @@ locals {
     cat <<EOF > /home/ubuntu/.teleport-env
     export RDS_ADDRESS="${aws_db_instance.teleport.address}"
     export DB_SECRET_NAME="${aws_secretsmanager_secret.db_password.name}"
+    export SESSIONS_BUCKET="${aws_s3_bucket.teleport_sessions.bucket}"
     EOF
     chmod 600 /home/ubuntu/.teleport-env
     chown ubuntu:ubuntu /home/ubuntu/.teleport-env
