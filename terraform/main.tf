@@ -205,13 +205,18 @@ locals {
     systemctl kill --kill-who=all apt-daily.service || true
     systemctl kill --kill-who=all apt-daily-upgrade.service || true
 
-    # Wait for all dpkg/apt locks to be fully released
-    while fuser /var/lib/dpkg/lock-frontend /var/lib/apt/lists/lock /var/lib/dpkg/lock >/dev/null 2>&1; do
+    # Wait using systemd-run to block until dpkg is available
+    systemd-run --property="After=apt-daily.service apt-daily-upgrade.service" \
+      --wait /bin/true 2>/dev/null || true
+
+    # Belt-and-suspenders: poll all lock files
+    while fuser /var/lib/dpkg/lock-frontend \
+                /var/lib/apt/lists/lock \
+                /var/lib/dpkg/lock \
+                /var/cache/apt/archives/lock >/dev/null 2>&1; do
       echo "Waiting for apt lock..."
       sleep 5
     done
-
-    # Additional wait to allow any in-progress dpkg operations to complete
     sleep 10
 
     # ── Kernel modules & sysctl ──────────────────────────────────────────────
@@ -297,11 +302,16 @@ locals {
     systemctl kill --kill-who=all apt-daily.service || true
     systemctl kill --kill-who=all apt-daily-upgrade.service || true
 
-    while fuser /var/lib/dpkg/lock-frontend /var/lib/apt/lists/lock /var/lib/dpkg/lock >/dev/null 2>&1; do
+    systemd-run --property="After=apt-daily.service apt-daily-upgrade.service" \
+      --wait /bin/true 2>/dev/null || true
+
+    while fuser /var/lib/dpkg/lock-frontend \
+                /var/lib/apt/lists/lock \
+                /var/lib/dpkg/lock \
+                /var/cache/apt/archives/lock >/dev/null 2>&1; do
       echo "Waiting for apt lock..."
       sleep 5
     done
-
     sleep 10
 
     # ── Kernel modules & sysctl ──────────────────────────────────────────────
