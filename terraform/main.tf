@@ -202,10 +202,17 @@ locals {
     systemctl disable --now unattended-upgrades || true
     systemctl disable --now apt-daily.timer || true
     systemctl disable --now apt-daily-upgrade.timer || true
-    while fuser /var/lib/dpkg/lock-frontend /var/lib/apt/lists/lock >/dev/null 2>&1; do
+    systemctl kill --kill-who=all apt-daily.service || true
+    systemctl kill --kill-who=all apt-daily-upgrade.service || true
+
+    # Wait for all dpkg/apt locks to be fully released
+    while fuser /var/lib/dpkg/lock-frontend /var/lib/apt/lists/lock /var/lib/dpkg/lock >/dev/null 2>&1; do
       echo "Waiting for apt lock..."
       sleep 5
     done
+
+    # Additional wait to allow any in-progress dpkg operations to complete
+    sleep 10
 
     # ── Kernel modules & sysctl ──────────────────────────────────────────────
     modprobe overlay
@@ -287,10 +294,15 @@ locals {
     systemctl disable --now unattended-upgrades || true
     systemctl disable --now apt-daily.timer || true
     systemctl disable --now apt-daily-upgrade.timer || true
-    while fuser /var/lib/dpkg/lock-frontend /var/lib/apt/lists/lock >/dev/null 2>&1; do
+    systemctl kill --kill-who=all apt-daily.service || true
+    systemctl kill --kill-who=all apt-daily-upgrade.service || true
+
+    while fuser /var/lib/dpkg/lock-frontend /var/lib/apt/lists/lock /var/lib/dpkg/lock >/dev/null 2>&1; do
       echo "Waiting for apt lock..."
       sleep 5
     done
+
+    sleep 10
 
     # ── Kernel modules & sysctl ──────────────────────────────────────────────
     modprobe overlay
@@ -309,8 +321,17 @@ locals {
     sysctl --system
 
     # ── Minimal dependencies ─────────────────────────────────────────────────
-    apt-get update
-    apt-get install -y apt-transport-https ca-certificates curl gnupg python3
+    apt_install() {
+      for i in 1 2 3 4 5; do
+        apt-get "$@" && return 0
+        echo "apt-get failed (attempt $i), retrying in 15s..."
+        sleep 15
+      done
+      return 1
+    }
+
+    apt_install update
+    apt_install install -y apt-transport-https ca-certificates curl gnupg python3
   EOT
 }
 
