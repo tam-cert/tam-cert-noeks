@@ -1,0 +1,41 @@
+clusterName: grant-tam-teleport.gvteleport.com
+
+chartMode: standalone
+
+persistence:
+  enabled: false
+
+acme: true
+acmeEmail: grant.voss@goteleport.com
+
+proxyListenerMode: multiplex
+
+auth:
+  teleportConfig:
+    teleport:
+      log:
+        output: stderr
+        severity: INFO
+      storage:
+        type: postgresql
+        conn_string: "postgresql://teleport:{{ db_password }}@{{ rds_address }}:5432/teleport_backend?sslmode=require&pool_max_conns=20"
+        audit_events_uri:
+          - "postgresql://teleport:{{ db_password }}@{{ rds_address }}:5432/teleport_audit?sslmode=require"
+
+proxy:
+  teleportConfig:
+    teleport:
+      log:
+        output: stderr
+        severity: INFO
+    proxy_service:
+      https_keypairs_reload_interval: 12h
+
+highAvailability:
+  replicaCount: 1
+  requireAntiAffinity: false
+
+authentication:
+  type: local
+  localAuth: true
+  secondFactor: "otp"

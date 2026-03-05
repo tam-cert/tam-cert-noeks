@@ -35,9 +35,9 @@
     KUBECONFIG: /home/ubuntu/.kube/config
   changed_when: true
 
-- name: Copy Teleport values file
-  ansible.builtin.copy:
-    src: "{{ playbook_dir }}/../helm/teleport-values.yaml"
+- name: Template Teleport values file with RDS connection strings
+  ansible.builtin.template:
+    src: teleport-values.yaml.j2
     dest: /home/ubuntu/teleport-values.yaml
     owner: ubuntu
     group: ubuntu
@@ -50,8 +50,6 @@
       --namespace teleport
       --version 18.7.1
       --values /home/ubuntu/teleport-values.yaml
-      --set auth.teleportConfig.teleport.storage.conn_string="postgresql://teleport:{{ db_password }}@{{ rds_address }}:5432/teleport_backend?sslmode=require&pool_max_conns=20"
-      --set "auth.teleportConfig.teleport.storage.audit_events_uri[0]=postgresql://teleport:{{ db_password }}@{{ rds_address }}:5432/teleport_audit?sslmode=require"
       --wait
       --timeout 5m
   environment:

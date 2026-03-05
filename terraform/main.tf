@@ -207,6 +207,7 @@ locals {
     mkdir -p "$ANSIBLE_DIR/roles/k8s-master/tasks"
     mkdir -p "$ANSIBLE_DIR/roles/k8s-workers/tasks"
     mkdir -p "$ANSIBLE_DIR/roles/teleport/tasks"
+    mkdir -p "$ANSIBLE_DIR/roles/teleport/templates"
 
     # Wait for network and GitHub to be reachable
     until curl -fsSL --max-time 5 https://raw.githubusercontent.com > /dev/null 2>&1; do
