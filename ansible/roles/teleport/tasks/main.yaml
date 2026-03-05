@@ -36,6 +36,12 @@
   environment:
     KUBECONFIG: /home/ubuntu/.kube/config
 
+- name: Install PostgreSQL client
+  ansible.builtin.apt:
+    name: postgresql-client
+    state: present
+    update_cache: true
+
 - name: Create teleport_audit database in RDS
   ansible.builtin.command:
     cmd: >
