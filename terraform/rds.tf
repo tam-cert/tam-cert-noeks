@@ -1,3 +1,19 @@
+# ─── Store DB password in AWS Secrets Manager ────────────────────────────────
+
+resource "aws_secretsmanager_secret" "db_password" {
+  name                    = "${var.training_prefix}/teleport/db-password"
+  recovery_window_in_days = 0
+
+  tags = merge(local.common_tags, {
+    Name = "${var.training_prefix}-teleport-db-password"
+  })
+}
+
+resource "aws_secretsmanager_secret_version" "db_password" {
+  secret_id     = aws_secretsmanager_secret.db_password.id
+  secret_string = var.db_password
+}
+
 # ─── RDS Subnet Group ─────────────────────────────────────────────────────────
 
 resource "aws_db_subnet_group" "main" {

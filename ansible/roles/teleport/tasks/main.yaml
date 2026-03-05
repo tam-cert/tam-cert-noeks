@@ -1,4 +1,28 @@
 ---
+- name: Source environment vars file
+  ansible.builtin.shell:
+    cmd: source /home/ubuntu/.teleport-env && env
+  register: env_vars
+  changed_when: false
+
+- name: Set RDS address fact from env file
+  ansible.builtin.set_fact:
+    rds_address: "{{ env_vars.stdout | regex_search('RDS_ADDRESS=(.+)', '\\1') | first }}"
+
+- name: Set DB secret name fact from env file
+  ansible.builtin.set_fact:
+    db_secret_name: "{{ env_vars.stdout | regex_search('DB_SECRET_NAME=(.+)', '\\1') | first }}"
+
+- name: Fetch DB password from AWS Secrets Manager
+  ansible.builtin.command:
+    cmd: aws secretsmanager get-secret-value --secret-id {{ db_secret_name }} --region us-west-2 --query SecretString --output text
+  register: db_secret_result
+  changed_when: false
+
+- name: Set DB password fact
+  ansible.builtin.set_fact:
+    db_password: "{{ db_secret_result.stdout }}"
+
 - name: Install Helm
   ansible.builtin.shell:
     cmd: curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash

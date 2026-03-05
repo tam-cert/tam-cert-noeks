@@ -37,6 +37,42 @@ variable "db_password" {
 }
 variable "github_repo"      { default = "https://raw.githubusercontent.com/tam-cert/tam-cert-noeks/main" }
 
+# ─── IAM Role for EC2 instances ──────────────────────────────────────────────
+
+resource "aws_iam_role" "ec2" {
+  name = "${var.training_prefix}-ec2-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Action    = "sts:AssumeRole"
+      Effect    = "Allow"
+      Principal = { Service = "ec2.amazonaws.com" }
+    }]
+  })
+
+  tags = local.common_tags
+}
+
+resource "aws_iam_role_policy" "secrets_manager" {
+  name = "${var.training_prefix}-secrets-manager-policy"
+  role = aws_iam_role.ec2.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["secretsmanager:GetSecretValue"]
+      Resource = [aws_secretsmanager_secret.db_password.arn]
+    }]
+  })
+}
+
+resource "aws_iam_instance_profile" "ec2" {
+  name = "${var.training_prefix}-ec2-profile"
+  role = aws_iam_role.ec2.name
+}
+
 # ─── SSH Key Pair ─────────────────────────────────────────────────────────────
 
 resource "tls_private_key" "main" {
@@ -287,6 +323,7 @@ resource "aws_instance" "master" {
   subnet_id              = aws_subnet.main.id
   source_dest_check      = false
   private_ip             = var.master_ip
+  iam_instance_profile   = aws_iam_instance_profile.ec2.name
   user_data              = local.master_userdata
 
   tags = merge(local.common_tags, {
@@ -306,6 +343,7 @@ resource "aws_instance" "node1" {
   subnet_id              = aws_subnet.main.id
   source_dest_check      = false
   private_ip             = var.node1_ip
+  iam_instance_profile   = aws_iam_instance_profile.ec2.name
   user_data              = local.worker_userdata
 
   tags = merge(local.common_tags, {
@@ -325,6 +363,7 @@ resource "aws_instance" "node2" {
   subnet_id              = aws_subnet.main.id
   source_dest_check      = false
   private_ip             = var.node2_ip
+  iam_instance_profile   = aws_iam_instance_profile.ec2.name
   user_data              = local.worker_userdata
 
   tags = merge(local.common_tags, {
