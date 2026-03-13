@@ -10,6 +10,11 @@
   ansible.builtin.set_fact:
     teleport_oidc_role_arn: "{{ env_vars.stdout | regex_search('TELEPORT_OIDC_ROLE_ARN=(.+)', '\\1') | first | default('') }}"
 
+- name: Remove existing integration role file to force fresh fetch
+  ansible.builtin.file:
+    path: "{{ ansible_env.HOME }}/ansible/roles/teleport-oidc/tasks/main.yaml"
+    state: absent
+
 - name: Wait for Teleport auth to be ready
   ansible.builtin.command:
     cmd: kubectl rollout status deployment/teleport-auth -n teleport --timeout=120s
