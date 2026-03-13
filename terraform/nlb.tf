@@ -15,12 +15,13 @@ resource "aws_lb" "teleport" {
 }
 
 # ─── Target Group ─────────────────────────────────────────────────────────────
-# Targets MetalLB IP on port 443 for traffic.
-# Health check uses Kubernetes healthCheckNodePort on node IPs.
+# Targets all three node IPs on NodePort 30647.
+# Health check uses healthCheckNodePort 30723 — returns 200 only on the node
+# running the proxy pod (externalTrafficPolicy: Local).
 
 resource "aws_lb_target_group" "teleport" {
   name        = "${var.training_prefix}-teleport-tg"
-  port        = 443
+  port        = 32443
   protocol    = "TCP"
   vpc_id      = aws_vpc.main.id
   target_type = "ip"
@@ -28,7 +29,7 @@ resource "aws_lb_target_group" "teleport" {
   health_check {
     enabled             = true
     protocol            = "HTTP"
-    port                = var.teleport_health_check_node_port
+    port                = "32444"
     path                = "/healthz"
     healthy_threshold   = 2
     unhealthy_threshold = 2
@@ -45,12 +46,24 @@ resource "aws_lb_target_group" "teleport" {
   })
 }
 
-# ─── Register MetalLB IP as target on port 443 ───────────────────────────────
+# ─── Register all three node IPs as targets ───────────────────────────────────
 
-resource "aws_lb_target_group_attachment" "teleport" {
+resource "aws_lb_target_group_attachment" "master" {
   target_group_arn = aws_lb_target_group.teleport.arn
-  target_id        = "172.49.20.100"
-  port             = 443
+  target_id        = var.master_ip
+  port             = 32443
+}
+
+resource "aws_lb_target_group_attachment" "node1" {
+  target_group_arn = aws_lb_target_group.teleport.arn
+  target_id        = var.node1_ip
+  port             = 32443
+}
+
+resource "aws_lb_target_group_attachment" "node2" {
+  target_group_arn = aws_lb_target_group.teleport.arn
+  target_id        = var.node2_ip
+  port             = 32443
 }
 
 # ─── Listener ─────────────────────────────────────────────────────────────────

@@ -42,6 +42,13 @@ service:
   spec:
     externalTrafficPolicy: Local
     allocateLoadBalancerNodePorts: true
+    healthCheckNodePort: 32444
+  ports:
+    - name: tls
+      port: 443
+      targetPort: 3080
+      protocol: TCP
+      nodePort: 32443
   ports:
     - name: tls
       port: 443
