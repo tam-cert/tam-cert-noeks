@@ -29,11 +29,13 @@ resource "aws_lb_target_group" "teleport" {
 
   health_check {
     enabled             = true
-    protocol            = "TCP"
-    port                = "443"
+    protocol            = "HTTP"
+    port                = "3000"
+    path                = "/healthz"
     healthy_threshold   = 2
     unhealthy_threshold = 2
     interval            = 10
+    matcher             = "200"
   }
 
   lifecycle {
