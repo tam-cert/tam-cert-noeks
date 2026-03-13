@@ -17,11 +17,11 @@ resource "aws_lb" "teleport" {
 }
 
 # ─── Target Group ─────────────────────────────────────────────────────────────
-# Points to the MetalLB IP 172.49.20.100 on port 443
+# Uses instance target type targeting node IPs directly on the Teleport NodePort
 
 resource "aws_lb_target_group" "teleport" {
   name        = "${var.training_prefix}-teleport-tg"
-  port        = 443
+  port        = 32059
   protocol    = "TCP"
   vpc_id      = aws_vpc.main.id
   target_type = "ip"
@@ -29,7 +29,7 @@ resource "aws_lb_target_group" "teleport" {
   health_check {
     enabled             = true
     protocol            = "TCP"
-    port                = "443"
+    port                = "32059"
     healthy_threshold   = 2
     unhealthy_threshold = 2
     interval            = 10
@@ -40,12 +40,24 @@ resource "aws_lb_target_group" "teleport" {
   })
 }
 
-# ─── Register MetalLB IP as target ────────────────────────────────────────────
+# ─── Register all three node IPs as targets on the NodePort ──────────────────
 
-resource "aws_lb_target_group_attachment" "teleport" {
+resource "aws_lb_target_group_attachment" "master" {
   target_group_arn = aws_lb_target_group.teleport.arn
-  target_id        = "172.49.20.100"
-  port             = 443
+  target_id        = var.master_ip
+  port             = 32059
+}
+
+resource "aws_lb_target_group_attachment" "node1" {
+  target_group_arn = aws_lb_target_group.teleport.arn
+  target_id        = var.node1_ip
+  port             = 32059
+}
+
+resource "aws_lb_target_group_attachment" "node2" {
+  target_group_arn = aws_lb_target_group.teleport.arn
+  target_id        = var.node2_ip
+  port             = 32059
 }
 
 # ─── Listener ─────────────────────────────────────────────────────────────────
@@ -61,16 +73,16 @@ resource "aws_lb_listener" "teleport_443" {
   }
 }
 
-# ─── Security Group: allow NLB to reach cluster nodes ─────────────────────────
+# ─── Security Group: allow NLB to reach NodePort on cluster nodes ─────────────
 
 resource "aws_security_group_rule" "nlb_to_cluster" {
   type              = "ingress"
-  from_port         = 443
-  to_port           = 443
+  from_port         = 32059
+  to_port           = 32059
   protocol          = "tcp"
   cidr_blocks       = ["0.0.0.0/0"]
   security_group_id = aws_security_group.main.id
-  description       = "Allow HTTPS from NLB and internet to Teleport"
+  description       = "Allow NLB health checks and traffic to Teleport NodePort"
 }
 
 # ─── Outputs ──────────────────────────────────────────────────────────────────
