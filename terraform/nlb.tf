@@ -21,7 +21,7 @@ resource "aws_lb" "teleport" {
 # TCP health check on 443 — passes on successful TCP connect regardless of TLS.
 
 resource "aws_lb_target_group" "teleport" {
-  name        = "${var.training_prefix}-teleport-tg"
+  name        = "${var.training_prefix}-teleport-tg2"
   port        = 443
   protocol    = "TCP"
   vpc_id      = aws_vpc.main.id
@@ -36,8 +36,12 @@ resource "aws_lb_target_group" "teleport" {
     interval            = 10
   }
 
+  lifecycle {
+    create_before_destroy = true
+  }
+
   tags = merge(local.common_tags, {
-    Name = "${var.training_prefix}-teleport-tg"
+    Name = "${var.training_prefix}-teleport-tg2"
   })
 }
 
