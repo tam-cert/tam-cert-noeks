@@ -18,7 +18,7 @@ resource "aws_lb" "teleport" {
 
 # ─── Target Group ─────────────────────────────────────────────────────────────
 # Targets MetalLB IP on port 443.
-# Health check uses Teleport's HTTP diag port 3080 to avoid SNI issues.
+# TCP health check on 443 — passes on successful TCP connect regardless of TLS.
 
 resource "aws_lb_target_group" "teleport" {
   name        = "${var.training_prefix}-teleport-tg"
@@ -29,13 +29,11 @@ resource "aws_lb_target_group" "teleport" {
 
   health_check {
     enabled             = true
-    protocol            = "HTTP"
-    port                = "3080"
-    path                = "/healthz"
+    protocol            = "TCP"
+    port                = "443"
     healthy_threshold   = 2
     unhealthy_threshold = 2
     interval            = 10
-    matcher             = "200"
   }
 
   tags = merge(local.common_tags, {
@@ -74,16 +72,6 @@ resource "aws_security_group_rule" "nlb_to_teleport_443" {
   cidr_blocks       = ["0.0.0.0/0"]
   security_group_id = aws_security_group.main.id
   description       = "Allow HTTPS traffic to Teleport via MetalLB"
-}
-
-resource "aws_security_group_rule" "nlb_health_check" {
-  type              = "ingress"
-  from_port         = 3080
-  to_port           = 3080
-  protocol          = "tcp"
-  cidr_blocks       = ["0.0.0.0/0"]
-  security_group_id = aws_security_group.main.id
-  description       = "Allow NLB health checks to Teleport diag port"
 }
 
 # ─── Outputs ──────────────────────────────────────────────────────────────────
