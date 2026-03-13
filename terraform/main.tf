@@ -173,6 +173,14 @@ resource "aws_security_group" "main" {
   }
 
   ingress {
+    description = "Teleport NodePort"
+    from_port   = 32059
+    to_port     = 32059
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  ingress {
     description = "NLB health check via Kubernetes healthCheckNodePort"
     from_port   = 31916
     to_port     = 31916

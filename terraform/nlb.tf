@@ -1,6 +1,4 @@
 # ─── NLB for Teleport ─────────────────────────────────────────────────────────
-# Routes external HTTPS traffic to the MetalLB IP (172.49.20.100)
-# assigned to the Teleport proxy service.
 
 resource "aws_lb" "teleport" {
   name               = "${var.training_prefix}-teleport-nlb"
@@ -17,12 +15,13 @@ resource "aws_lb" "teleport" {
 }
 
 # ─── Target Group ─────────────────────────────────────────────────────────────
-# Targets MetalLB IP on port 443.
-# TCP health check on 443 — passes on successful TCP connect regardless of TLS.
+# Targets node IPs directly on the Teleport NodePort (32059).
+# Health check uses the Kubernetes healthCheckNodePort (31916) which returns
+# 200 only on nodes running the proxy pod (externalTrafficPolicy: Local).
 
 resource "aws_lb_target_group" "teleport" {
   name        = "${var.training_prefix}-teleport-tg"
-  port        = 443
+  port        = 32059
   protocol    = "TCP"
   vpc_id      = aws_vpc.main.id
   target_type = "ip"
@@ -30,7 +29,7 @@ resource "aws_lb_target_group" "teleport" {
   health_check {
     enabled             = true
     protocol            = "HTTP"
-    port                = "3000"
+    port                = "31916"
     path                = "/healthz"
     healthy_threshold   = 2
     unhealthy_threshold = 2
@@ -47,12 +46,24 @@ resource "aws_lb_target_group" "teleport" {
   })
 }
 
-# ─── Register MetalLB IP as target ────────────────────────────────────────────
+# ─── Register all three node IPs as targets ───────────────────────────────────
 
-resource "aws_lb_target_group_attachment" "teleport" {
+resource "aws_lb_target_group_attachment" "master" {
   target_group_arn = aws_lb_target_group.teleport.arn
-  target_id        = "172.49.20.100"
-  port             = 443
+  target_id        = var.master_ip
+  port             = 32059
+}
+
+resource "aws_lb_target_group_attachment" "node1" {
+  target_group_arn = aws_lb_target_group.teleport.arn
+  target_id        = var.node1_ip
+  port             = 32059
+}
+
+resource "aws_lb_target_group_attachment" "node2" {
+  target_group_arn = aws_lb_target_group.teleport.arn
+  target_id        = var.node2_ip
+  port             = 32059
 }
 
 # ─── Listener ─────────────────────────────────────────────────────────────────
