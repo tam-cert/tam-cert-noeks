@@ -42,6 +42,9 @@ variable "teleport_license" {
 variable "teleport_node_port"              { default = "32443" }
 variable "teleport_health_check_node_port" { default = "32444" }
 variable "github_repo"     { default = "https://raw.githubusercontent.com/tam-cert/tam-cert-noeks/main" }
+variable "aws_oidc_role_arn" {
+  description = "ARN of the existing IAM role for Teleport AWS OIDC integration"
+}
 
 # ─── IAM Role for EC2 instances ──────────────────────────────────────────────
 
@@ -227,10 +230,9 @@ locals {
     set -euo pipefail
     exec > >(tee /var/log/cloud-init-k8s.log) 2>&1
 
-    # ── Prevent interactive prompts ──────────────────────────────────────────
     export DEBIAN_FRONTEND=noninteractive
 
-    # ── Wait for apt lock released by unattended-upgrades ────────────────────
+    # ── Wait for apt lock ────────────────────────────────────────────────────
     systemctl disable --now unattended-upgrades || true
     systemctl disable --now apt-daily.timer || true
     systemctl disable --now apt-daily-upgrade.timer || true
@@ -267,7 +269,7 @@ locals {
     EOF
     sysctl --system
 
-    # ── Minimal dependencies for Ansible ────────────────────────────────────
+    # ── Minimal dependencies ─────────────────────────────────────────────────
     apt_install() {
       for i in 1 2 3 4 5; do
         apt-get "$@" && return 0
@@ -280,7 +282,7 @@ locals {
     apt_install update
     apt_install install -y apt-transport-https ca-certificates curl gnupg ansible python3 unzip
 
-    # Install AWS CLI v2 from official installer
+    # Install AWS CLI v2
     curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip
     unzip -q /tmp/awscliv2.zip -d /tmp
     /tmp/aws/install
@@ -325,6 +327,7 @@ locals {
 
     for f in ansible.cfg hosts k8s-setup.yaml k8s-master.yaml k8s-workers.yaml metallb.yaml teleport.yaml teleport-oidc.yaml; do
       echo "Fetching ansible/$f..."
+      rm -f "$ANSIBLE_DIR/$f"
       curl -fsSL "$REPO/ansible/$f" -o "$ANSIBLE_DIR/$f" || { echo "ERROR: failed to fetch $f"; exit 1; }
     done
 
@@ -335,8 +338,10 @@ locals {
       "roles/k8s-workers/tasks/main.yaml" \
       "roles/metallb/tasks/main.yaml" \
       "roles/teleport/tasks/main.yaml" \
-      "roles/teleport/templates/teleport-values.yaml.j2"; do
+      "roles/teleport/templates/teleport-values.yaml.j2" \
+      "roles/teleport-oidc/tasks/main.yaml"; do
       echo "Fetching ansible/$role_file..."
+      rm -f "$ANSIBLE_DIR/$role_file"
       curl -fsSL "$REPO/ansible/$role_file" -o "$ANSIBLE_DIR/$role_file" || { echo "ERROR: failed to fetch $role_file"; exit 1; }
     done
 
@@ -344,9 +349,9 @@ locals {
     cp "$ANSIBLE_DIR/ansible.cfg" /home/ubuntu/.ansible.cfg
 
     # ── Run Ansible playbooks ────────────────────────────────────────────────
-    sudo -u ubuntu ansible-playbook "$ANSIBLE_DIR/k8s-setup.yaml"   -i "$ANSIBLE_DIR/hosts" --become
-    sudo -u ubuntu ansible-playbook "$ANSIBLE_DIR/k8s-master.yaml"  -i "$ANSIBLE_DIR/hosts" --become
-    sudo -u ubuntu ansible-playbook "$ANSIBLE_DIR/k8s-workers.yaml" -i "$ANSIBLE_DIR/hosts" --become
+    sudo -u ubuntu ansible-playbook "$ANSIBLE_DIR/k8s-setup.yaml"      -i "$ANSIBLE_DIR/hosts" --become
+    sudo -u ubuntu ansible-playbook "$ANSIBLE_DIR/k8s-master.yaml"     -i "$ANSIBLE_DIR/hosts" --become
+    sudo -u ubuntu ansible-playbook "$ANSIBLE_DIR/k8s-workers.yaml"    -i "$ANSIBLE_DIR/hosts" --become
     sudo -u ubuntu ansible-playbook "$ANSIBLE_DIR/metallb.yaml"        -i "$ANSIBLE_DIR/hosts" --become
     sudo -u ubuntu ansible-playbook "$ANSIBLE_DIR/teleport.yaml"       -i "$ANSIBLE_DIR/hosts" --become
     sudo -u ubuntu ansible-playbook "$ANSIBLE_DIR/teleport-oidc.yaml"  -i "$ANSIBLE_DIR/hosts" --become
