@@ -37,7 +37,7 @@
   ansible.builtin.shell:
     cmd: |
       printf 'kind: cluster_auth_preference\nversion: v2\nmetadata:\n  name: cluster-auth-preference\nspec:\n  type: saml\n  connector_name: okta\n  second_factor: "on"\n  webauthn:\n    rp_id: grant-tam-teleport.gvteleport.com\n' | \
-      kubectl exec -i -n teleport {{ auth_pod.stdout }} -- tctl create -f -
+      kubectl exec -i -n teleport {{ auth_pod.stdout }} -- tctl create --confirm -f -
     executable: /bin/bash
   environment:
     KUBECONFIG: /home/ubuntu/.kube/config
