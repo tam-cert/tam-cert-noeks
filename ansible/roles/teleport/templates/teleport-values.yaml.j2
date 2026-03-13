@@ -41,7 +41,7 @@ highAvailability:
 service:
   spec:
     externalTrafficPolicy: Local
-    allocateLoadBalancerNodePorts: false
+    allocateLoadBalancerNodePorts: true
   ports:
     - name: tls
       port: 443
