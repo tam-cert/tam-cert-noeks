@@ -1,0 +1,7 @@
+---
+- name: Configure Teleport AWS OIDC Integration
+  hosts: master
+  roles:
+    - teleport-oidc
+  remote_user: ubuntu
+  become: yes

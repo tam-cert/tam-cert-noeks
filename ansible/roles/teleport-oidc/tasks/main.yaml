@@ -1,0 +1,58 @@
+---
+- name: Source environment vars file
+  ansible.builtin.shell:
+    cmd: source /home/ubuntu/.teleport-env && env
+    executable: /bin/bash
+  register: env_vars
+  changed_when: false
+
+- name: Get Teleport OIDC role ARN from env file
+  ansible.builtin.set_fact:
+    teleport_oidc_role_arn: "{{ env_vars.stdout | regex_search('TELEPORT_OIDC_ROLE_ARN=(.+)', '\\1') | first | default('') }}"
+
+- name: Wait for Teleport auth to be ready
+  ansible.builtin.command:
+    cmd: kubectl rollout status deployment/teleport-auth -n teleport --timeout=120s
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  changed_when: false
+
+- name: Create Teleport AWS OIDC integration via tctl
+  ansible.builtin.shell:
+    cmd: |
+      kubectl exec -n teleport \
+        $(kubectl get pod -n teleport -l app.kubernetes.io/component=auth \
+          -o jsonpath='{.items[0].metadata.name}') \
+        -- tctl create -f <<'EOF'
+      kind: integration
+      sub_kind: aws-oidc
+      version: v1
+      metadata:
+        name: grant-tam-teleport-integration
+      spec:
+        aws_oidc:
+          role_arn: "{{ teleport_oidc_role_arn }}"
+      EOF
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  register: tctl_result
+  failed_when:
+    - tctl_result.rc != 0
+    - '"already exists" not in tctl_result.stderr'
+  changed_when: tctl_result.rc == 0
+
+- name: Verify integration was created
+  ansible.builtin.command:
+    cmd: >
+      kubectl exec -n teleport
+      $(kubectl get pod -n teleport -l app.kubernetes.io/component=auth
+        -o jsonpath='{.items[0].metadata.name}')
+      -- tctl get integration/grant-tam-teleport-integration
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  changed_when: false
+  register: integration_result
+
+- name: Print integration status
+  ansible.builtin.debug:
+    msg: "{{ integration_result.stdout_lines }}"

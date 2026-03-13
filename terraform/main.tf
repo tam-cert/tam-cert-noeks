@@ -292,6 +292,7 @@ locals {
     export DB_SECRET_NAME="${aws_secretsmanager_secret.db_password.name}"
     export SESSIONS_BUCKET="${aws_s3_bucket.teleport_sessions.bucket}"
     export LICENSE_SECRET_NAME="${aws_secretsmanager_secret.teleport_license.name}"
+    export TELEPORT_OIDC_ROLE_ARN="${aws_iam_role.teleport_oidc.arn}"
     EOF
     chmod 600 /home/ubuntu/.teleport-env
     chown ubuntu:ubuntu /home/ubuntu/.teleport-env
@@ -315,13 +316,14 @@ locals {
     mkdir -p "$ANSIBLE_DIR/roles/metallb/tasks"
     mkdir -p "$ANSIBLE_DIR/roles/teleport/tasks"
     mkdir -p "$ANSIBLE_DIR/roles/teleport/templates"
+    mkdir -p "$ANSIBLE_DIR/roles/teleport-oidc/tasks"
 
     until curl -fsSL --max-time 5 https://raw.githubusercontent.com > /dev/null 2>&1; do
       echo "Waiting for GitHub to be reachable..."
       sleep 5
     done
 
-    for f in ansible.cfg hosts k8s-setup.yaml k8s-master.yaml k8s-workers.yaml metallb.yaml teleport.yaml; do
+    for f in ansible.cfg hosts k8s-setup.yaml k8s-master.yaml k8s-workers.yaml metallb.yaml teleport.yaml teleport-oidc.yaml; do
       echo "Fetching ansible/$f..."
       curl -fsSL "$REPO/ansible/$f" -o "$ANSIBLE_DIR/$f" || { echo "ERROR: failed to fetch $f"; exit 1; }
     done
@@ -345,8 +347,9 @@ locals {
     sudo -u ubuntu ansible-playbook "$ANSIBLE_DIR/k8s-setup.yaml"   -i "$ANSIBLE_DIR/hosts" --become
     sudo -u ubuntu ansible-playbook "$ANSIBLE_DIR/k8s-master.yaml"  -i "$ANSIBLE_DIR/hosts" --become
     sudo -u ubuntu ansible-playbook "$ANSIBLE_DIR/k8s-workers.yaml" -i "$ANSIBLE_DIR/hosts" --become
-    sudo -u ubuntu ansible-playbook "$ANSIBLE_DIR/metallb.yaml"     -i "$ANSIBLE_DIR/hosts" --become
-    sudo -u ubuntu ansible-playbook "$ANSIBLE_DIR/teleport.yaml"    -i "$ANSIBLE_DIR/hosts" --become
+    sudo -u ubuntu ansible-playbook "$ANSIBLE_DIR/metallb.yaml"        -i "$ANSIBLE_DIR/hosts" --become
+    sudo -u ubuntu ansible-playbook "$ANSIBLE_DIR/teleport.yaml"       -i "$ANSIBLE_DIR/hosts" --become
+    sudo -u ubuntu ansible-playbook "$ANSIBLE_DIR/teleport-oidc.yaml"  -i "$ANSIBLE_DIR/hosts" --become
   EOT
 
   worker_userdata = <<-EOT
