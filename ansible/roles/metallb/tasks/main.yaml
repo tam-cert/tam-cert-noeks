@@ -30,7 +30,7 @@
 
 - name: Wait for MetalLB webhook to be ready
   ansible.builtin.command:
-    cmd: kubectl wait --for=condition=ready pod -l component=controller -n metallb-system --timeout=120s
+    cmd: kubectl wait --for=condition=ready pod -l app.kubernetes.io/component=controller -n metallb-system --timeout=120s
   environment:
     KUBECONFIG: /home/ubuntu/.kube/config
   changed_when: false
