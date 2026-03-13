@@ -43,7 +43,11 @@ service:
   ports:
     - name: tls
       port: 443
-      targetPort: 443
+      targetPort: 3080
+      protocol: TCP
+    - name: diag
+      port: 3000
+      targetPort: 3000
       protocol: TCP
 
 authentication:
