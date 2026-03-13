@@ -56,6 +56,20 @@ resource "aws_iam_role_policy" "s3_sessions" {
   })
 }
 
+resource "aws_secretsmanager_secret" "teleport_license" {
+  name                    = "${var.training_prefix}/teleport/license"
+  recovery_window_in_days = 0
+
+  tags = merge(local.common_tags, {
+    Name = "${var.training_prefix}-teleport-license"
+  })
+}
+
+resource "aws_secretsmanager_secret_version" "teleport_license" {
+  secret_id     = aws_secretsmanager_secret.teleport_license.id
+  secret_string = var.teleport_license
+}
+
 # ─── Store DB password in AWS Secrets Manager ────────────────────────────────
 
 resource "aws_secretsmanager_secret" "db_password" {

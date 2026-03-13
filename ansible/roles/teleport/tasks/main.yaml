@@ -52,6 +52,31 @@
   environment:
     KUBECONFIG: /home/ubuntu/.kube/config
 
+- name: Set license secret name fact from env file
+  ansible.builtin.set_fact:
+    license_secret_name: "{{ env_vars.stdout | regex_search('LICENSE_SECRET_NAME=(.+)', '\\1') | first }}"
+
+- name: Fetch Teleport license from AWS Secrets Manager
+  ansible.builtin.command:
+    cmd: aws secretsmanager get-secret-value --secret-id {{ license_secret_name }} --region us-west-2 --query SecretString --output text
+  register: license_result
+  changed_when: false
+
+- name: Set Teleport license fact
+  ansible.builtin.set_fact:
+    teleport_license: "{{ license_result.stdout }}"
+
+- name: Create Teleport license secret
+  ansible.builtin.shell:
+    cmd: |
+      kubectl create secret generic license \
+        --namespace teleport \
+        --from-literal=license.pem="{{ teleport_license }}" \
+        --dry-run=client -o yaml | kubectl apply -f -
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  changed_when: true
+
 - name: Create PostgreSQL credentials secret
   ansible.builtin.shell:
     cmd: |
@@ -80,7 +105,7 @@
       --version 18.7.1
       --values /home/ubuntu/teleport-values.yaml
       --wait
-      --timeout 5m
+      --timeout 10m
   environment:
     KUBECONFIG: /home/ubuntu/.kube/config
   changed_when: true

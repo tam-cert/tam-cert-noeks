@@ -82,6 +82,7 @@ jobs:
             -var="customer_ip=${{ secrets.CUSTOMER_IP }}" \
             -var="tf_state_bucket=${{ secrets.TF_STATE_BUCKET }}" \
             -var="db_password=${{ secrets.DB_PASSWORD }}" \
+            -var="teleport_license=${{ secrets.TELEPORT_LICENSE }}" \
             -var="github_repo=https://raw.githubusercontent.com/${{ github.repository }}/main" \
             -out=tfplan \
             -no-color 2>&1 | tee plan_output.txt
@@ -144,6 +145,7 @@ jobs:
             -var="customer_ip=${{ secrets.CUSTOMER_IP }}" \
             -var="tf_state_bucket=${{ secrets.TF_STATE_BUCKET }}" \
             -var="db_password=${{ secrets.DB_PASSWORD }}" \
+            -var="teleport_license=${{ secrets.TELEPORT_LICENSE }}" \
             -var="github_repo=https://raw.githubusercontent.com/${{ github.repository }}/main"
 
       - name: Output cluster info
@@ -160,6 +162,12 @@ jobs:
           mkdir -p /tmp/keys
           terraform output -raw private_key_pem > /tmp/keys/grant-tam-key.pem
           chmod 600 /tmp/keys/grant-tam-key.pem
+
+      - name: Write Teleport license to file
+        if: |
+          (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+          (github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'apply')
+        run: echo "${{ secrets.TELEPORT_LICENSE }}" > /tmp/license.pem
 
       - name: Upload private key artifact
         if: |

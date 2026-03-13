@@ -36,6 +36,10 @@ variable "db_password" {
   description = "Master password for RDS PostgreSQL instance"
   sensitive   = true
 }
+variable "teleport_license" {
+  description = "Teleport Enterprise license file contents"
+  sensitive   = true
+}
 
 # ─── IAM Role for EC2 instances ──────────────────────────────────────────────
 
@@ -63,7 +67,10 @@ resource "aws_iam_role_policy" "secrets_manager" {
     Statement = [{
       Effect   = "Allow"
       Action   = ["secretsmanager:GetSecretValue"]
-      Resource = [aws_secretsmanager_secret.db_password.arn]
+      Resource = [
+        aws_secretsmanager_secret.db_password.arn,
+        aws_secretsmanager_secret.teleport_license.arn
+      ]
     }]
   })
 }
@@ -287,6 +294,7 @@ locals {
     export RDS_ADDRESS="${aws_db_instance.teleport.address}"
     export DB_SECRET_NAME="${aws_secretsmanager_secret.db_password.name}"
     export SESSIONS_BUCKET="${aws_s3_bucket.teleport_sessions.bucket}"
+    export LICENSE_SECRET_NAME="${aws_secretsmanager_secret.teleport_license.name}"
     EOF
     chmod 600 /home/ubuntu/.teleport-env
     chown ubuntu:ubuntu /home/ubuntu/.teleport-env
