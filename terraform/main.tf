@@ -12,9 +12,9 @@ terraform {
       source  = "hashicorp/local"
       version = "~> 2.0"
     }
-    postgresql = {
-      source  = "cyrilgdn/postgresql"
-      version = "~> 1.22"
+    null = {
+      source  = "hashicorp/null"
+      version = "~> 3.0"
     }
   }
 }

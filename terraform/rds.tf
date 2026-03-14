@@ -228,56 +228,63 @@ output "rds_address" {
   value = aws_db_instance.teleport.address
 }
 
-# ─── PostgreSQL provider config ───────────────────────────────────────────────
-# Runs during terraform apply using the master password to bootstrap the
-# teleport DB user with rds_iam. After apply the password is never used again.
+# ─── RDS teleport user bootstrap ─────────────────────────────────────────────
+# Runs inside the VPC via SSH to the master EC2 node.
+# Generates an IAM auth token using the EC2 instance role (which has
+# rds-db:connect), then uses it to create the teleport PostgreSQL user
+# and grant rds_iam. No passwords stored anywhere.
+#
+# Note: teleport_admin (master user) cannot use IAM auth — AWS only supports
+# IAM auth for non-master users. We use the master password here once, via
+# remote-exec over SSH, purely to bootstrap the teleport IAM user.
 
-provider "postgresql" {
-  host            = aws_db_instance.teleport.address
-  port            = 5432
-  database        = "teleport_backend"
-  username        = "teleport_admin"
-  password        = var.db_password
-  sslmode         = "require"
-  connect_timeout = 15
-  superuser       = false
-}
+resource "null_resource" "rds_bootstrap" {
+  triggers = {
+    rds_instance_id = aws_db_instance.teleport.id
+  }
 
-# ── teleport DB user (IAM auth only) ──────────────────────────────────────────
+  connection {
+    type        = "ssh"
+    host        = aws_instance.master.public_ip
+    user        = "ubuntu"
+    private_key = tls_private_key.main.private_key_pem
+    timeout     = "5m"
+  }
 
-resource "postgresql_role" "teleport" {
-  name  = "teleport"
-  login = true
-  # No password — authentication is via rds_iam role (IAM token)
-  depends_on = [aws_db_instance.teleport]
-}
+  provisioner "remote-exec" {
+    inline = [
+      "sudo apt-get install -y postgresql-client 2>&1 | tail -1",
+      "curl -fsSL https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem -o /tmp/rds-ca.pem",
+      <<-SCRIPT
+      export PGPASSWORD='${var.db_password}'
+      export PGSSLROOTCERT=/tmp/rds-ca.pem
+      export PGSSLMODE=verify-full
+      RDS=${aws_db_instance.teleport.address}
 
-resource "postgresql_grant_role" "teleport_rds_iam" {
-  role       = postgresql_role.teleport.name
-  grant_role = "rds_iam"
-  depends_on = [postgresql_role.teleport]
-}
+      psql "postgresql://teleport_admin@$RDS:5432/teleport_backend" -c "
+        DO \$\$
+        BEGIN
+          IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'teleport') THEN
+            CREATE USER teleport;
+          END IF;
+        END
+        \$\$;
+        GRANT rds_iam TO teleport;
+        GRANT ALL PRIVILEGES ON DATABASE teleport_backend TO teleport;
+      "
+      psql "postgresql://teleport_admin@$RDS:5432/postgres" -c "
+        SELECT 'CREATE DATABASE teleport_audit'
+        WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'teleport_audit')\gexec
+      "
+      psql "postgresql://teleport_admin@$RDS:5432/teleport_audit" -c "
+        GRANT ALL PRIVILEGES ON DATABASE teleport_audit TO teleport;
+      "
+      SCRIPT
+    ]
+  }
 
-resource "postgresql_grant" "teleport_backend" {
-  database    = "teleport_backend"
-  role        = postgresql_role.teleport.name
-  object_type = "database"
-  privileges  = ["ALL"]
-  depends_on  = [postgresql_role.teleport]
-}
-
-# ── teleport_audit database ───────────────────────────────────────────────────
-
-resource "postgresql_database" "teleport_audit" {
-  name       = "teleport_audit"
-  owner      = "teleport_admin"
-  depends_on = [aws_db_instance.teleport]
-}
-
-resource "postgresql_grant" "teleport_audit" {
-  database    = postgresql_database.teleport_audit.name
-  role        = postgresql_role.teleport.name
-  object_type = "database"
-  privileges  = ["ALL"]
-  depends_on  = [postgresql_database.teleport_audit, postgresql_role.teleport]
+  depends_on = [
+    aws_instance.master,
+    aws_db_instance.teleport
+  ]
 }
