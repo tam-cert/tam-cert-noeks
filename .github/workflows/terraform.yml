@@ -6,11 +6,14 @@ on:
       - main
     paths:
       - 'terraform/**'
+      - 'ansible/**'
   pull_request:
+    types: [opened, synchronize, reopened]
     branches:
       - main
     paths:
       - 'terraform/**'
+      - 'ansible/**'
   workflow_dispatch:
     inputs:
       action:
@@ -33,15 +36,21 @@ permissions:
   pull-requests: write
 
 jobs:
-  terraform:
-    name: Terraform ${{ github.event.inputs.action || (github.event_name == 'pull_request' && 'plan') || 'apply' }}
+  # ── Plan: runs on every PR and push to main ──────────────────────────────────
+  plan:
+    name: Terraform Plan
     runs-on: ubuntu-latest
+    if: |
+      github.event_name == 'pull_request' ||
+      github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'plan')
 
     defaults:
       run:
         working-directory: ${{ env.TF_WORKING_DIR }}
 
-    environment: ${{ (github.event.inputs.action == 'apply' || github.event.inputs.action == 'destroy' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && 'production' || '' }}
+    outputs:
+      plan_exit_code: ${{ steps.plan.outputs.exit_code }}
 
     steps:
       - name: Checkout
@@ -88,8 +97,18 @@ jobs:
             -var="okta_groups_editor=${{ secrets.OKTA_GROUPS_EDITOR }}" \
             -var="okta_groups_access=${{ secrets.OKTA_GROUPS_ACCESS }}" \
             -var="github_repo=https://raw.githubusercontent.com/${{ github.repository }}/main" \
+            -detailed-exitcode \
             -out=tfplan \
             -no-color 2>&1 | tee plan_output.txt
+          echo "exit_code=${PIPESTATUS[0]}" >> $GITHUB_OUTPUT
+        continue-on-error: true
+
+      - name: Upload plan artifact
+        uses: actions/upload-artifact@v4.6.0
+        with:
+          name: tfplan-${{ github.sha }}
+          path: ${{ env.TF_WORKING_DIR }}/tfplan
+          retention-days: 5
 
       - name: Post Plan to PR
         if: github.event_name == 'pull_request'
@@ -99,13 +118,21 @@ jobs:
             const fs = require('fs');
             const plan = fs.readFileSync('${{ env.TF_WORKING_DIR }}/plan_output.txt', 'utf8');
             const truncated = plan.length > 60000 ? plan.substring(0, 60000) + '\n... truncated' : plan;
+            const exitCode = '${{ steps.plan.outputs.exit_code }}';
+            const statusIcon = exitCode === '0' ? '✅ No changes' : exitCode === '2' ? '⚠️ Changes detected' : '❌ Plan failed';
+
             const body = [
-              '## Terraform Plan',
-              `- Init:     \`${{ steps.init.outcome }}\``,
-              `- Validate: \`${{ steps.validate.outcome }}\``,
-              `- Plan:     \`${{ steps.plan.outcome }}\``,
+              '## Terraform Plan — ' + statusIcon,
               '',
-              '<details><summary>Show Plan</summary>',
+              `| Step | Status |`,
+              `|------|--------|`,
+              `| Init | \`${{ steps.init.outcome }}\` |`,
+              `| Validate | \`${{ steps.validate.outcome }}\` |`,
+              `| Plan | \`${{ steps.plan.outcome }}\` |`,
+              '',
+              '> **Merging this PR will automatically trigger `terraform apply`** via the `production` environment gate.',
+              '',
+              '<details><summary>Show Plan Output</summary>',
               '',
               '```hcl',
               truncated,
@@ -135,14 +162,117 @@ jobs:
               body,
             });
 
+      - name: Fail if plan errored
+        if: steps.plan.outputs.exit_code == '1'
+        run: exit 1
+
+  # ── Apply: runs automatically when PR is merged to main ──────────────────────
+  # Gated by the 'production' environment — requires manual approval from
+  # configured reviewers before terraform apply executes.
+  apply:
+    name: Terraform Apply
+    runs-on: ubuntu-latest
+    needs: plan
+    if: |
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'apply')
+
+    environment: production
+
+    defaults:
+      run:
+        working-directory: ${{ env.TF_WORKING_DIR }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4.2.2
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4.1.0
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token:     ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region:            us-west-2
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3.1.2
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Terraform Init
+        run: |
+          terraform init \
+            -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}" \
+            -backend-config="key=tam-cert-noeks/terraform.tfstate" \
+            -backend-config="region=us-west-2" \
+            -backend-config="encrypt=true" \
+            -backend-config="dynamodb_table=${{ secrets.TF_LOCK_TABLE }}"
+
+      - name: Download plan artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: tfplan-${{ github.sha }}
+          path: ${{ env.TF_WORKING_DIR }}
+
       - name: Terraform Apply
-        if: |
-          (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
-          (github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'apply')
         run: terraform apply -auto-approve tfplan
 
+      - name: Output cluster info
+        run: terraform output
+
+      - name: Save private key artifact
+        run: |
+          mkdir -p /tmp/keys
+          terraform output -raw private_key_pem > /tmp/keys/grant-tam-key.pem
+          chmod 600 /tmp/keys/grant-tam-key.pem
+
+      - name: Upload private key artifact
+        uses: actions/upload-artifact@v4.6.0
+        with:
+          name: grant-tam-key
+          path: /tmp/keys/grant-tam-key.pem
+          retention-days: 1
+
+  # ── Destroy: manual only, always gated by production environment ─────────────
+  destroy:
+    name: Terraform Destroy
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'destroy'
+
+    environment: production
+
+    defaults:
+      run:
+        working-directory: ${{ env.TF_WORKING_DIR }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4.2.2
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4.1.0
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token:     ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region:            us-west-2
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3.1.2
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Terraform Init
+        run: |
+          terraform init \
+            -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}" \
+            -backend-config="key=tam-cert-noeks/terraform.tfstate" \
+            -backend-config="region=us-west-2" \
+            -backend-config="encrypt=true" \
+            -backend-config="dynamodb_table=${{ secrets.TF_LOCK_TABLE }}"
+
       - name: Terraform Destroy
-        if: github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'destroy'
         run: |
           terraform destroy -auto-approve \
             -var="training_prefix=grant-tam" \
@@ -155,28 +285,3 @@ jobs:
             -var="okta_groups_editor=${{ secrets.OKTA_GROUPS_EDITOR }}" \
             -var="okta_groups_access=${{ secrets.OKTA_GROUPS_ACCESS }}" \
             -var="github_repo=https://raw.githubusercontent.com/${{ github.repository }}/main"
-
-      - name: Output cluster info
-        if: |
-          (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
-          (github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'apply')
-        run: terraform output
-
-      - name: Save private key to artifact
-        if: |
-          (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
-          (github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'apply')
-        run: |
-          mkdir -p /tmp/keys
-          terraform output -raw private_key_pem > /tmp/keys/grant-tam-key.pem
-          chmod 600 /tmp/keys/grant-tam-key.pem
-
-      - name: Upload private key artifact
-        if: |
-          (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
-          (github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'apply')
-        uses: actions/upload-artifact@v4.6.0
-        with:
-          name: grant-tam-key
-          path: /tmp/keys/grant-tam-key.pem
-          retention-days: 1
