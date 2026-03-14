@@ -1,4 +1,4 @@
-name: Terraform - K8s Cluster
+name: Deploy - K8s Cluster + Teleport RBAC
 
 on:
   push:
@@ -17,7 +17,7 @@ on:
   workflow_dispatch:
     inputs:
       action:
-        description: 'Terraform action to run'
+        description: 'Action to run'
         required: true
         default: 'plan'
         type: choice
@@ -29,6 +29,8 @@ on:
 env:
   TF_WORKING_DIR: terraform
   TF_VERSION: 1.8.5
+  TELEPORT_PROXY: "grant-tam-teleport.gvteleport.com:443"
+  TELEPORT_BOT_TOKEN: "rbac-github-bot-token"
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 permissions:
@@ -124,13 +126,13 @@ jobs:
             const body = [
               '## Terraform Plan — ' + statusIcon,
               '',
-              `| Step | Status |`,
-              `|------|--------|`,
+              '| Step | Status |',
+              '|------|--------|',
               `| Init | \`${{ steps.init.outcome }}\` |`,
               `| Validate | \`${{ steps.validate.outcome }}\` |`,
               `| Plan | \`${{ steps.plan.outcome }}\` |`,
               '',
-              '> **Merging this PR will automatically trigger `terraform apply`** via the `production` environment gate.',
+              '> **Merging this PR will automatically trigger `terraform apply` + Teleport RBAC apply** via the `production` environment gate.',
               '',
               '<details><summary>Show Plan Output</summary>',
               '',
@@ -166,11 +168,14 @@ jobs:
         if: steps.plan.outputs.exit_code == '1'
         run: exit 1
 
-  # ── Apply: runs automatically when PR is merged to main ──────────────────────
-  # Gated by the 'production' environment — requires manual approval from
-  # configured reviewers before terraform apply executes.
+  # ── Apply: infra + Teleport RBAC, triggered on merge to main ─────────────────
+  # Gated by production environment approval.
+  # Two phases:
+  #   1. terraform apply   — provisions/updates all infrastructure
+  #   2. teleport-rbac     — applies RBAC roles via Machine ID (tbot/tctl)
+  #                          only runs if the cluster is reachable
   apply:
-    name: Terraform Apply
+    name: Apply — Infrastructure + Teleport RBAC
     runs-on: ubuntu-latest
     needs: plan
     if: |
@@ -179,6 +184,10 @@ jobs:
 
     environment: production
 
+    permissions:
+      id-token: write   # required for Machine ID GitHub OIDC join
+      contents: read
+
     defaults:
       run:
         working-directory: ${{ env.TF_WORKING_DIR }}
@@ -186,6 +195,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4.2.2
+
+      # ── Phase 1: Terraform ───────────────────────────────────────────────────
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4.1.0
@@ -221,18 +232,112 @@ jobs:
       - name: Output cluster info
         run: terraform output
 
-      - name: Save private key artifact
+      - name: Save SSH key artifact
         run: |
           mkdir -p /tmp/keys
           terraform output -raw private_key_pem > /tmp/keys/grant-tam-key.pem
           chmod 600 /tmp/keys/grant-tam-key.pem
 
-      - name: Upload private key artifact
+      - name: Upload SSH key artifact
         uses: actions/upload-artifact@v4.6.0
         with:
           name: grant-tam-key
           path: /tmp/keys/grant-tam-key.pem
           retention-days: 1
+
+      # ── Phase 2: Teleport RBAC via Machine ID ────────────────────────────────
+      # Authenticates using GitHub OIDC → tbot → short-lived X.509 cert.
+      # Requires the Teleport cluster to be up and the rbac-github-bot-token
+      # join token to exist (created by Ansible teleport-rbac bootstrap step).
+      # This step is skipped with a warning if the cluster is not yet reachable
+      # (e.g. first apply before cloud-init has completed).
+
+      - name: Install Teleport
+        uses: teleport-actions/setup@v1
+        with:
+          version: 18.7.1
+
+      - name: Check Teleport cluster reachability
+        id: check_teleport
+        run: |
+          if curl -sf --max-time 10 \
+            "https://${{ env.TELEPORT_PROXY }}/v1/webapi/ping" > /dev/null 2>&1; then
+            echo "reachable=true" >> $GITHUB_OUTPUT
+            echo "Teleport cluster is reachable — proceeding with RBAC apply"
+          else
+            echo "reachable=false" >> $GITHUB_OUTPUT
+            echo "::warning::Teleport cluster not yet reachable — RBAC apply skipped. Re-run this workflow once the cluster is up."
+          fi
+        working-directory: .
+
+      - name: Authenticate with Teleport Machine ID
+        if: steps.check_teleport.outputs.reachable == 'true'
+        uses: teleport-actions/auth@v2
+        with:
+          proxy: ${{ env.TELEPORT_PROXY }}
+          token: ${{ env.TELEPORT_BOT_TOKEN }}
+          credential-ttl: 10m
+          anonymous-telemetry: 0
+
+      - name: Install jinja2-cli
+        if: steps.check_teleport.outputs.reachable == 'true'
+        run: pip install jinja2-cli
+        working-directory: .
+
+      - name: Render RBAC templates
+        if: steps.check_teleport.outputs.reachable == 'true'
+        env:
+          OKTA_METADATA_URL: ${{ secrets.OKTA_METADATA_URL }}
+          OKTA_GROUPS_EDITOR: ${{ secrets.OKTA_GROUPS_EDITOR }}
+          OKTA_GROUPS_ACCESS:  ${{ secrets.OKTA_GROUPS_ACCESS }}
+          TELEPORT_DOMAIN: "grant-tam-teleport.gvteleport.com"
+        run: |
+          mkdir -p /tmp/rbac-rendered
+
+          render() {
+            jinja2 "$1" \
+              -D teleport_domain="${TELEPORT_DOMAIN}" \
+              -D okta_metadata_url="${OKTA_METADATA_URL}" \
+              -D okta_groups_editor="${OKTA_GROUPS_EDITOR}" \
+              -D okta_groups_access="${OKTA_GROUPS_ACCESS}" \
+              -o "$2"
+          }
+
+          render ansible/roles/teleport-rbac/templates/login-rule-okta-team.yaml.j2    /tmp/rbac-rendered/login-rule-okta-team.yaml
+          render ansible/roles/teleport-rbac/templates/role-base.yaml.j2               /tmp/rbac-rendered/role-base.yaml
+          render ansible/roles/teleport-rbac/templates/role-kube-access.yaml.j2        /tmp/rbac-rendered/role-kube-access.yaml
+          render ansible/roles/teleport-rbac/templates/role-ssh-access.yaml.j2         /tmp/rbac-rendered/role-ssh-access.yaml
+          render ansible/roles/teleport-rbac/templates/role-ssh-root-access.yaml.j2    /tmp/rbac-rendered/role-ssh-root-access.yaml
+          render ansible/roles/teleport-rbac/templates/role-auto-approver.yaml.j2      /tmp/rbac-rendered/role-auto-approver.yaml
+          render ansible/roles/teleport-rbac/templates/saml-okta-patch.yaml.j2         /tmp/rbac-rendered/saml-okta-patch.yaml
+          render ansible/roles/teleport-rbac/templates/cluster_auth_preference.yaml.j2 /tmp/rbac-rendered/cluster-auth-preference.yaml
+        working-directory: .
+
+      - name: Apply Teleport RBAC resources
+        if: steps.check_teleport.outputs.reachable == 'true'
+        run: |
+          tctl create -f /tmp/rbac-rendered/login-rule-okta-team.yaml
+          tctl create -f /tmp/rbac-rendered/role-base.yaml
+          tctl create -f /tmp/rbac-rendered/role-kube-access.yaml
+          tctl create -f /tmp/rbac-rendered/role-ssh-access.yaml
+          tctl create -f /tmp/rbac-rendered/role-ssh-root-access.yaml
+          tctl create -f /tmp/rbac-rendered/role-auto-approver.yaml
+          tctl create -f /tmp/rbac-rendered/saml-okta-patch.yaml
+          tctl create -f /tmp/rbac-rendered/cluster-auth-preference.yaml
+        working-directory: .
+
+      - name: Verify Teleport RBAC resources
+        if: steps.check_teleport.outputs.reachable == 'true'
+        run: |
+          echo "=== Roles ==="
+          tctl get roles/base roles/kube-access roles/ssh-access roles/ssh-root-access roles/auto-approver roles/rbac-manager
+          echo "=== Login Rules ==="
+          tctl get login_rule/okta-team-trait
+          echo "=== SAML Connector ==="
+          tctl get saml/okta
+          echo "=== Cluster Auth Preference ==="
+          tctl get cluster_auth_preference
+        working-directory: .
 
   # ── Destroy: manual only, always gated by production environment ─────────────
   destroy:
