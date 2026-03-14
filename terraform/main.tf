@@ -300,8 +300,6 @@ locals {
     rm -rf /tmp/awscliv2.zip /tmp/aws
 
     # ── Write environment vars file ──────────────────────────────────────────
-    # DB_SECRET_NAME removed — Teleport authenticates to RDS via IAM token,
-    # not password. The RDS address is still needed for the connection string.
     cat <<EOF > /home/ubuntu/.teleport-env
     export RDS_ADDRESS="${aws_db_instance.teleport.address}"
     export SESSIONS_BUCKET="${aws_s3_bucket.teleport_sessions.bucket}"
@@ -332,7 +330,6 @@ locals {
     mkdir -p "$ANSIBLE_DIR/roles/k8s-setup/defaults"
     mkdir -p "$ANSIBLE_DIR/roles/k8s-master/tasks"
     mkdir -p "$ANSIBLE_DIR/roles/k8s-workers/tasks"
-    mkdir -p "$ANSIBLE_DIR/roles/metallb/tasks"
     mkdir -p "$ANSIBLE_DIR/roles/teleport/tasks"
     mkdir -p "$ANSIBLE_DIR/roles/teleport/templates"
     mkdir -p "$ANSIBLE_DIR/roles/teleport-oidc/tasks"
@@ -345,7 +342,7 @@ locals {
       sleep 5
     done
 
-    for f in ansible.cfg hosts site.yaml k8s-setup.yaml k8s-master.yaml k8s-workers.yaml metallb.yaml teleport.yaml teleport-oidc.yaml teleport-sso.yaml teleport-rbac.yaml; do
+    for f in ansible.cfg hosts site.yaml k8s-setup.yaml k8s-master.yaml k8s-workers.yaml teleport.yaml teleport-oidc.yaml teleport-sso.yaml teleport-rbac.yaml; do
       echo "Fetching ansible/$f..."
       rm -f "$ANSIBLE_DIR/$f"
       curl -fsSL "$REPO/ansible/$f" -o "$ANSIBLE_DIR/$f" || { echo "ERROR: failed to fetch $f"; exit 1; }
@@ -356,7 +353,6 @@ locals {
       "roles/k8s-setup/defaults/main.yaml" \
       "roles/k8s-master/tasks/main.yaml" \
       "roles/k8s-workers/tasks/main.yaml" \
-      "roles/metallb/tasks/main.yaml" \
       "roles/teleport/tasks/main.yaml" \
       "roles/teleport/templates/teleport-values.yaml.j2" \
       "roles/teleport-oidc/tasks/main.yaml" \
@@ -376,7 +372,6 @@ locals {
     sudo -u ubuntu ansible-playbook "$ANSIBLE_DIR/k8s-setup.yaml"     -i "$ANSIBLE_DIR/hosts" --become
     sudo -u ubuntu ansible-playbook "$ANSIBLE_DIR/k8s-master.yaml"    -i "$ANSIBLE_DIR/hosts" --become
     sudo -u ubuntu ansible-playbook "$ANSIBLE_DIR/k8s-workers.yaml"   -i "$ANSIBLE_DIR/hosts" --become
-    sudo -u ubuntu ansible-playbook "$ANSIBLE_DIR/metallb.yaml"       -i "$ANSIBLE_DIR/hosts" --become
     sudo -u ubuntu ansible-playbook "$ANSIBLE_DIR/teleport.yaml"      -i "$ANSIBLE_DIR/hosts" --become
     sudo -u ubuntu ansible-playbook "$ANSIBLE_DIR/teleport-oidc.yaml" -i "$ANSIBLE_DIR/hosts" --become
     sudo -u ubuntu ansible-playbook "$ANSIBLE_DIR/teleport-sso.yaml"  -i "$ANSIBLE_DIR/hosts" --become

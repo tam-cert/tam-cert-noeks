@@ -2,9 +2,8 @@
 - import_playbook: k8s-setup.yaml       # 1 - containerd, kubeadm, kubelet, kubectl
 - import_playbook: k8s-master.yaml      # 2 - kubeadm init, Calico CNI, kubeconfig
 - import_playbook: k8s-workers.yaml     # 3 - dynamic kubeadm join
-- import_playbook: metallb.yaml         # 4 - MetalLB Helm + IPAddressPool
-- import_playbook: teleport.yaml        # 5 - Teleport Enterprise Helm install
-- import_playbook: teleport-oidc.yaml   # 6 - AWS OIDC integration resource
-- import_playbook: teleport-sso.yaml    # 7 - Okta SAML connector (bootstrap only)
-- import_playbook: teleport-rbac.yaml   # 8 - Bootstrap: rbac-manager role + Machine ID bot + join token
+- import_playbook: teleport.yaml        # 4 - Teleport Enterprise Helm install
+- import_playbook: teleport-oidc.yaml   # 5 - AWS OIDC integration resource
+- import_playbook: teleport-sso.yaml    # 6 - Okta SAML connector (bootstrap only)
+- import_playbook: teleport-rbac.yaml   # 7 - Bootstrap: rbac-manager role + Machine ID bot + join token
                                         #     (RBAC roles applied by GitHub Actions workflow, not Ansible)
