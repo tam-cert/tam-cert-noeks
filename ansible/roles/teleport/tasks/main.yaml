@@ -1,8 +1,8 @@
 ---
 # teleport/tasks/main.yaml
 # Installs Teleport Enterprise via Helm using IAM authentication for RDS.
-# No passwords stored anywhere — all RDS connections use IAM auth tokens
-# generated from the EC2 instance role via aws rds generate-db-auth-token.
+# The teleport PostgreSQL user and rds_iam grant are handled by Terraform
+# (postgresql provider) during apply — Ansible does not touch the DB at all.
 
 - name: Source environment vars file
   ansible.builtin.shell:
@@ -26,80 +26,6 @@
 - name: Set Teleport license fact
   ansible.builtin.set_fact:
     teleport_license: "{{ license_result.stdout }}"
-
-# ── RDS IAM user bootstrap ────────────────────────────────────────────────────
-# Uses aws rds generate-db-auth-token to obtain a short-lived IAM auth token
-# for the teleport_admin master user. This token is used only to create the
-# 'teleport' IAM user and grant it rds_iam. No password is stored anywhere.
-
-- name: Install psql client
-  ansible.builtin.apt:
-    name: postgresql-client
-    state: present
-    update_cache: true
-  become: true
-
-- name: Wait for RDS to be reachable
-  ansible.builtin.wait_for:
-    host: "{{ rds_address }}"
-    port: 5432
-    timeout: 120
-
-- name: Generate IAM auth token for teleport_admin
-  ansible.builtin.command:
-    cmd: >
-      aws rds generate-db-auth-token
-      --hostname {{ rds_address }}
-      --port 5432
-      --username teleport_admin
-      --region us-west-2
-  register: rds_iam_token
-  changed_when: false
-  no_log: true
-
-- name: Download RDS CA bundle
-  ansible.builtin.get_url:
-    url: https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem
-    dest: /tmp/rds-ca.pem
-    mode: "0644"
-
-- name: Create teleport IAM DB user and grant rds_iam role
-  ansible.builtin.shell:
-    cmd: |
-      export PGPASSWORD="{{ rds_iam_token.stdout }}"
-      export PGSSLROOTCERT=/tmp/rds-ca.pem
-      export PGSSLMODE=verify-full
-
-      # Create teleport user if it doesn't exist
-      psql "postgresql://teleport_admin@{{ rds_address }}:5432/teleport_backend" \
-        -c "DO \$\$
-            BEGIN
-              IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'teleport') THEN
-                CREATE USER teleport;
-              END IF;
-            END
-            \$\$;"
-
-      # Grant IAM auth role so Teleport can connect via token
-      psql "postgresql://teleport_admin@{{ rds_address }}:5432/teleport_backend" \
-        -c "GRANT rds_iam TO teleport;"
-
-      # Grant full access to backend DB
-      psql "postgresql://teleport_admin@{{ rds_address }}:5432/teleport_backend" \
-        -c "GRANT ALL PRIVILEGES ON DATABASE teleport_backend TO teleport;"
-
-      # Create audit DB if missing
-      psql "postgresql://teleport_admin@{{ rds_address }}:5432/postgres" \
-        -c "SELECT 'CREATE DATABASE teleport_audit' \
-            WHERE NOT EXISTS \
-            (SELECT FROM pg_database WHERE datname = 'teleport_audit')\gexec"
-
-      # Grant access to audit DB
-      psql "postgresql://teleport_admin@{{ rds_address }}:5432/teleport_audit" \
-        -c "GRANT ALL PRIVILEGES ON DATABASE teleport_audit TO teleport;"
-    executable: /bin/bash
-  no_log: true
-  changed_when: true
 
 # ── Helm install ──────────────────────────────────────────────────────────────
 

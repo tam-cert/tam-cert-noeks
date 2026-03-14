@@ -227,3 +227,57 @@ output "rds_endpoint" {
 output "rds_address" {
   value = aws_db_instance.teleport.address
 }
+
+# ─── PostgreSQL provider config ───────────────────────────────────────────────
+# Runs during terraform apply using the master password to bootstrap the
+# teleport DB user with rds_iam. After apply the password is never used again.
+
+provider "postgresql" {
+  host            = aws_db_instance.teleport.address
+  port            = 5432
+  database        = "teleport_backend"
+  username        = "teleport_admin"
+  password        = var.db_password
+  sslmode         = "require"
+  connect_timeout = 15
+  superuser       = false
+}
+
+# ── teleport DB user (IAM auth only) ──────────────────────────────────────────
+
+resource "postgresql_role" "teleport" {
+  name  = "teleport"
+  login = true
+  # No password — authentication is via rds_iam role (IAM token)
+  depends_on = [aws_db_instance.teleport]
+}
+
+resource "postgresql_grant_role" "teleport_rds_iam" {
+  role       = postgresql_role.teleport.name
+  grant_role = "rds_iam"
+  depends_on = [postgresql_role.teleport]
+}
+
+resource "postgresql_grant" "teleport_backend" {
+  database    = "teleport_backend"
+  role        = postgresql_role.teleport.name
+  object_type = "database"
+  privileges  = ["ALL"]
+  depends_on  = [postgresql_role.teleport]
+}
+
+# ── teleport_audit database ───────────────────────────────────────────────────
+
+resource "postgresql_database" "teleport_audit" {
+  name       = "teleport_audit"
+  owner      = "teleport_admin"
+  depends_on = [aws_db_instance.teleport]
+}
+
+resource "postgresql_grant" "teleport_audit" {
+  database    = postgresql_database.teleport_audit.name
+  role        = postgresql_role.teleport.name
+  object_type = "database"
+  privileges  = ["ALL"]
+  depends_on  = [postgresql_database.teleport_audit, postgresql_role.teleport]
+}
