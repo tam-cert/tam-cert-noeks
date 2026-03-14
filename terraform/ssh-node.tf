@@ -68,7 +68,8 @@ resource "aws_instance" "ssh_node_1" {
     Name = "${var.training_prefix}-ssh-node-1"
     # 'team' tag is imported by Teleport as a node label.
     # Must match the Okta group name for ssh-access/ssh-root-access RBAC scoping.
-    team = "platform"
+    team        = "platform"
+    description = "Teleport SSH demo node — IAM auto-enrollment"
   })
 
   volume_tags = merge(local.common_tags, {
