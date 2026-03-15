@@ -323,16 +323,15 @@ locals {
     rm -rf /tmp/awscliv2.zip /tmp/aws
 
     # ── Write environment vars file ──────────────────────────────────────────
-    cat <<EOF > /home/ubuntu/.teleport-env
-    export RDS_ADDRESS="${aws_db_instance.teleport.address}"
-    export SESSIONS_BUCKET="${aws_s3_bucket.teleport_sessions.bucket}"
-    export LICENSE_SECRET_NAME="${aws_secretsmanager_secret.teleport_license.name}"
-    export TELEPORT_OIDC_ROLE_ARN="${var.aws_oidc_role_arn}"
-    export OKTA_METADATA_URL="${var.okta_metadata_url}"
-    export OKTA_GROUPS_EDITOR="${var.okta_groups_editor}"
-    export OKTA_GROUPS_ACCESS="${var.okta_groups_access}"
-    export GITHUB_REPOSITORY="grantvoss-teleport/tam-cert-noeks"
-    EOF
+    printf 'export RDS_ADDRESS=%s\n' "${aws_db_instance.teleport.address}" >> /home/ubuntu/.teleport-env
+    printf 'export SESSIONS_BUCKET=%s\n' "${aws_s3_bucket.teleport_sessions.bucket}" >> /home/ubuntu/.teleport-env
+    printf 'export LICENSE_SECRET_NAME=%s\n' "${aws_secretsmanager_secret.teleport_license.name}" >> /home/ubuntu/.teleport-env
+    printf 'export TELEPORT_OIDC_ROLE_ARN=%s\n' "${var.aws_oidc_role_arn}" >> /home/ubuntu/.teleport-env
+    printf 'export OKTA_METADATA_URL=%s\n' "${var.okta_metadata_url}" >> /home/ubuntu/.teleport-env
+    printf 'export OKTA_GROUPS_EDITOR=%s\n' "${var.okta_groups_editor}" >> /home/ubuntu/.teleport-env
+    printf 'export OKTA_GROUPS_ACCESS=%s\n' "${var.okta_groups_access}" >> /home/ubuntu/.teleport-env
+    printf 'export GITHUB_REPOSITORY=grantvoss-teleport/tam-cert-noeks\n' >> /home/ubuntu/.teleport-env
+    touch /home/ubuntu/.teleport-env
     chmod 600 /home/ubuntu/.teleport-env
     chown ubuntu:ubuntu /home/ubuntu/.teleport-env
     echo "source ~/.teleport-env" >> /home/ubuntu/.bashrc
