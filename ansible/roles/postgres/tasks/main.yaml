@@ -2,23 +2,17 @@
 # postgres/tasks/main.yaml
 # Deploys the in-cluster PostgreSQL pod for Teleport backend storage.
 # Sequence:
-#   1. Apply namespace, RBAC, ConfigMaps, and the cert-gen Job
-#   2. Wait for cert-gen Job to complete (creates postgres-certs Secret)
-#   3. Apply postgres-secret (admin credentials)
-#   4. Apply Deployment and Service
-#   5. Wait for postgres pod to be ready
-#   6. Copy client certs into the teleport namespace so Teleport can use them
+#   1. Apply namespace + ConfigMaps
+#   2. Generate CA, server, and client certs on the master node via openssl
+#   3. Store certs as the postgres-certs Secret
+#   4. Apply postgres admin secret
+#   5. Apply Deployment and Service
+#   6. Wait for postgres pod to be ready
+#   7. Copy client certs into the teleport namespace
 
 - name: Apply postgres namespace
   ansible.builtin.command:
     cmd: kubectl apply -f /home/ubuntu/ansible/roles/postgres/files/namespace.yaml
-  environment:
-    KUBECONFIG: /home/ubuntu/.kube/config
-  changed_when: true
-
-- name: Apply RBAC for cert-gen job
-  ansible.builtin.command:
-    cmd: kubectl apply -f /home/ubuntu/ansible/roles/postgres/files/postgres-certs-job.yaml
   environment:
     KUBECONFIG: /home/ubuntu/.kube/config
   changed_when: true
@@ -34,6 +28,97 @@
     KUBECONFIG: /home/ubuntu/.kube/config
   changed_when: true
 
+# ── Certificate generation on master node ────────────────────────────────────
+# Generates CA, server cert, and client cert using openssl on the master.
+# Client cert CN must be 'teleport' to match PostgreSQL username for cert auth.
+
+- name: Check if postgres-certs secret already exists
+  ansible.builtin.command:
+    cmd: kubectl get secret postgres-certs -n postgres
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  register: certs_check
+  failed_when: false
+  changed_when: false
+
+- name: Create cert working directory
+  ansible.builtin.file:
+    path: /tmp/pg-certs
+    state: directory
+    mode: "0700"
+  when: certs_check.rc != 0
+
+- name: Generate CA key and cert
+  ansible.builtin.shell:
+    cmd: |
+      openssl genrsa -out /tmp/pg-certs/ca.key 4096
+      openssl req -new -x509 -days 3650 -key /tmp/pg-certs/ca.key \
+        -out /tmp/pg-certs/ca.crt \
+        -subj "/CN=postgres-ca/O=teleport"
+    executable: /bin/bash
+  when: certs_check.rc != 0
+  changed_when: true
+
+- name: Generate server cert
+  ansible.builtin.shell:
+    cmd: |
+      openssl genrsa -out /tmp/pg-certs/server.key 4096
+      openssl req -new -key /tmp/pg-certs/server.key \
+        -out /tmp/pg-certs/server.csr \
+        -subj "/CN=postgres-service.postgres.svc.cluster.local/O=teleport"
+      openssl x509 -req -days 3650 \
+        -in /tmp/pg-certs/server.csr \
+        -CA /tmp/pg-certs/ca.crt \
+        -CAkey /tmp/pg-certs/ca.key \
+        -CAcreateserial \
+        -out /tmp/pg-certs/server.crt \
+        -extfile <(printf "subjectAltName=DNS:postgres-service.postgres.svc.cluster.local,DNS:postgres-service,DNS:localhost")
+      chmod 600 /tmp/pg-certs/server.key
+    executable: /bin/bash
+  when: certs_check.rc != 0
+  changed_when: true
+
+- name: Generate client cert (CN=teleport matches PostgreSQL username)
+  ansible.builtin.shell:
+    cmd: |
+      openssl genrsa -out /tmp/pg-certs/client.key 4096
+      openssl req -new -key /tmp/pg-certs/client.key \
+        -out /tmp/pg-certs/client.csr \
+        -subj "/CN=teleport/O=teleport"
+      openssl x509 -req -days 3650 \
+        -in /tmp/pg-certs/client.csr \
+        -CA /tmp/pg-certs/ca.crt \
+        -CAkey /tmp/pg-certs/ca.key \
+        -CAcreateserial \
+        -out /tmp/pg-certs/client.crt
+      chmod 600 /tmp/pg-certs/client.key
+    executable: /bin/bash
+  when: certs_check.rc != 0
+  changed_when: true
+
+- name: Store certs as postgres-certs Secret in postgres namespace
+  ansible.builtin.command:
+    cmd: >
+      kubectl create secret generic postgres-certs
+      -n postgres
+      --from-file=ca.crt=/tmp/pg-certs/ca.crt
+      --from-file=server.crt=/tmp/pg-certs/server.crt
+      --from-file=server.key=/tmp/pg-certs/server.key
+      --from-file=client.crt=/tmp/pg-certs/client.crt
+      --from-file=client.key=/tmp/pg-certs/client.key
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  when: certs_check.rc != 0
+  changed_when: true
+
+- name: Remove cert working directory
+  ansible.builtin.file:
+    path: /tmp/pg-certs
+    state: absent
+  when: certs_check.rc != 0
+
+# ── Deploy postgres ───────────────────────────────────────────────────────────
+
 - name: Apply postgres admin secret
   ansible.builtin.shell:
     cmd: |
@@ -47,13 +132,6 @@
     KUBECONFIG: /home/ubuntu/.kube/config
   no_log: true
   changed_when: true
-
-- name: Wait for cert-gen job to complete
-  ansible.builtin.command:
-    cmd: kubectl wait job/postgres-cert-gen -n postgres --for=condition=complete --timeout=120s
-  environment:
-    KUBECONFIG: /home/ubuntu/.kube/config
-  changed_when: false
 
 - name: Apply postgres Deployment
   ansible.builtin.command:
@@ -71,10 +149,12 @@
 
 - name: Wait for postgres pod to be ready
   ansible.builtin.command:
-    cmd: kubectl rollout status deployment/postgres -n postgres --timeout=180s
+    cmd: kubectl rollout status deployment/postgres -n postgres --timeout=300s
   environment:
     KUBECONFIG: /home/ubuntu/.kube/config
   changed_when: false
+
+# ── Copy client certs to teleport namespace ───────────────────────────────────
 
 - name: Ensure teleport namespace exists
   ansible.builtin.command:
@@ -98,9 +178,9 @@
     cmd: kubectl get secret postgres-certs -n postgres -o jsonpath='{.data.client\.key}'
   register: client_key_b64
   changed_when: false
+  no_log: true
   environment:
     KUBECONFIG: /home/ubuntu/.kube/config
-  no_log: true
 
 - name: Get CA cert from postgres-certs secret
   ansible.builtin.command:
@@ -110,27 +190,67 @@
   environment:
     KUBECONFIG: /home/ubuntu/.kube/config
 
+- name: Write certs to temp files for kubectl create secret
+  ansible.builtin.copy:
+    content: "{{ item.content | b64decode }}"
+    dest: "{{ item.dest }}"
+    mode: "0600"
+  loop:
+    - { content: "{{ client_crt_b64.stdout }}", dest: /tmp/teleport-client.crt }
+    - { content: "{{ ca_crt_b64.stdout }}",     dest: /tmp/teleport-ca.crt }
+  no_log: true
+
+- name: Write client key temp file
+  ansible.builtin.copy:
+    content: "{{ client_key_b64.stdout | b64decode }}"
+    dest: /tmp/teleport-client.key
+    mode: "0600"
+  no_log: true
+
 - name: Create teleport-pg-client-certs secret in teleport namespace
+  ansible.builtin.command:
+    cmd: >
+      kubectl create secret generic teleport-pg-client-certs
+      -n teleport
+      --from-file=client.crt=/tmp/teleport-client.crt
+      --from-file=client.key=/tmp/teleport-client.key
+      --from-file=ca.crt=/tmp/teleport-ca.crt
+      --dry-run=client -o yaml
+  register: secret_yaml
+  changed_when: false
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+
+- name: Apply teleport-pg-client-certs secret
   ansible.builtin.shell:
     cmd: |
       kubectl create secret generic teleport-pg-client-certs \
         -n teleport \
-        --from-literal=client.crt="{{ client_crt_b64.stdout | b64decode }}" \
-        --from-literal=client.key="{{ client_key_b64.stdout | b64decode }}" \
-        --from-literal=ca.crt="{{ ca_crt_b64.stdout | b64decode }}" \
+        --from-file=client.crt=/tmp/teleport-client.crt \
+        --from-file=client.key=/tmp/teleport-client.key \
+        --from-file=ca.crt=/tmp/teleport-ca.crt \
         --dry-run=client -o yaml | kubectl apply -f -
     executable: /bin/bash
   environment:
     KUBECONFIG: /home/ubuntu/.kube/config
-  no_log: true
   changed_when: true
 
+- name: Remove temp cert files
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /tmp/teleport-client.crt
+    - /tmp/teleport-client.key
+    - /tmp/teleport-ca.crt
+
 - name: Verify postgres is accepting connections
-  ansible.builtin.command:
-    cmd: >
-      kubectl exec -n postgres
-      $(kubectl get pod -n postgres -l app=postgres -o jsonpath='{.items[0].metadata.name}')
-      -- pg_isready -U postgres -d postgres
+  ansible.builtin.shell:
+    cmd: |
+      kubectl exec -n postgres \
+        $(kubectl get pod -n postgres -l app=postgres -o jsonpath='{.items[0].metadata.name}') \
+        -- pg_isready -U postgres -d postgres
+    executable: /bin/bash
   environment:
     KUBECONFIG: /home/ubuntu/.kube/config
   changed_when: false

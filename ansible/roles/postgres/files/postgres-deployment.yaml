@@ -15,18 +15,6 @@ spec:
       labels:
         app: postgres
     spec:
-      # Wait for certs to exist before starting
-      initContainers:
-        - name: wait-for-certs
-          image: bitnami/kubectl:latest
-          command: ["/bin/sh", "-c"]
-          args:
-            - |
-              until kubectl get secret postgres-certs -n postgres >/dev/null 2>&1; do
-                echo "Waiting for postgres-certs secret..."
-                sleep 5
-              done
-              echo "Certs ready"
       containers:
         - name: postgres
           image: ateleport/test:postgres-wal2json-17-1
@@ -73,7 +61,7 @@ spec:
               command: ["pg_isready", "-U", "postgres", "-d", "postgres"]
             initialDelaySeconds: 10
             periodSeconds: 5
-            failureThreshold: 6
+            failureThreshold: 12
           livenessProbe:
             exec:
               command: ["pg_isready", "-U", "postgres", "-d", "postgres"]
