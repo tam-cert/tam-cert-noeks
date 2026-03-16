@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pg-hba-config
+  namespace: postgres
+data:
+  pg_hba.conf: |
+    # TYPE  DATABASE        USER            ADDRESS         METHOD
+
+    # Local connections (used by postgres process itself)
+    local   all             all                             trust
+
+    # Allow admin user login with password (bootstrap/maintenance)
+    host    all             postgres        127.0.0.1/32    md5
+    host    all             postgres        ::1/128         md5
+
+    # Require client certificate for the teleport user from anywhere
+    # This enforces mutual TLS — Teleport must present a cert signed by our CA
+    hostssl all             teleport        all             cert clientcert=verify-full
+
+    # Deny all other connections by default
+    host    all             all             all             reject

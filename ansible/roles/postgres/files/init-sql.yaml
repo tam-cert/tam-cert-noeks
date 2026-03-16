@@ -1,0 +1,28 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: init-sql
+  namespace: postgres
+data:
+  init.sql: |
+    -- Create teleport user with replication privileges for logical replication backend
+    -- No password — authentication is via client certificate (pg_hba.conf: cert)
+    DO $$
+    BEGIN
+      IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'teleport') THEN
+        CREATE USER teleport WITH REPLICATION CREATEDB;
+      END IF;
+    END
+    $$;
+    ALTER ROLE teleport WITH LOGIN REPLICATION;
+
+    -- Create backend and audit databases
+    SELECT 'CREATE DATABASE teleport_backend OWNER teleport'
+    WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'teleport_backend')\gexec
+
+    SELECT 'CREATE DATABASE teleport_audit OWNER teleport'
+    WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'teleport_audit')\gexec
+
+    -- Grant full access
+    GRANT ALL PRIVILEGES ON DATABASE teleport_backend TO teleport;
+    GRANT ALL PRIVILEGES ON DATABASE teleport_audit TO teleport;

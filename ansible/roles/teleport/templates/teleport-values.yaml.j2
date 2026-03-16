@@ -19,13 +19,13 @@ auth:
         output: stderr
         severity: INFO
       storage:
-        # ── PostgreSQL backend (in-cluster pod) ───────────────────────────────
-        # Connection strings and TLS cert paths will be added here once the
-        # postgres pod config is supplied.
         type: postgresql
-        conn_string: ""
+        # In-cluster PostgreSQL pod — cert authentication, no password.
+        # CN of client cert matches PostgreSQL username 'teleport'.
+        # pg_hba.conf enforces: hostssl ... teleport ... cert clientcert=verify-full
+        conn_string: "postgresql://teleport@postgres-service.postgres.svc.cluster.local:5432/teleport_backend?sslmode=verify-full&sslcert=/pg-certs/client.crt&sslkey=/pg-certs/client.key&sslrootcert=/pg-certs/ca.crt&pool_max_conns=20"
         audit_events_uri:
-          - ""
+          - "postgresql://teleport@postgres-service.postgres.svc.cluster.local:5432/teleport_audit?sslmode=verify-full&sslcert=/pg-certs/client.crt&sslkey=/pg-certs/client.key&sslrootcert=/pg-certs/ca.crt"
         audit_sessions_uri: "s3://{{ sessions_bucket }}/sessions?region=us-west-2"
 
     auth_service:
@@ -36,6 +36,18 @@ auth:
         second_factor: "on"
         webauthn:
           rp_id: grant-tam-teleport.gvteleport.com
+
+  # Mount the client certs Secret (created by postgres Ansible role) into the auth pod
+  extraVolumes:
+    - name: pg-client-certs
+      secret:
+        secretName: teleport-pg-client-certs
+        defaultMode: 0600
+
+  extraVolumeMounts:
+    - name: pg-client-certs
+      mountPath: /pg-certs
+      readOnly: true
 
 proxy:
   teleportConfig:

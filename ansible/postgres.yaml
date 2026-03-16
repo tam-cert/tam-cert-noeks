@@ -1,0 +1,11 @@
+---
+- name: Deploy in-cluster PostgreSQL for Teleport backend
+  hosts: master
+  become: false
+  remote_user: ubuntu
+  vars:
+    # Admin password for the postgres superuser — bootstrap only.
+    # The teleport user authenticates via client certificate.
+    postgres_admin_password: "{{ lookup('env', 'POSTGRES_ADMIN_PASSWORD') | default('changeme-replace-in-production') }}"
+  roles:
+    - postgres

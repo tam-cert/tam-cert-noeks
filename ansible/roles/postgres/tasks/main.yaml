@@ -1,0 +1,141 @@
+---
+# postgres/tasks/main.yaml
+# Deploys the in-cluster PostgreSQL pod for Teleport backend storage.
+# Sequence:
+#   1. Apply namespace, RBAC, ConfigMaps, and the cert-gen Job
+#   2. Wait for cert-gen Job to complete (creates postgres-certs Secret)
+#   3. Apply postgres-secret (admin credentials)
+#   4. Apply Deployment and Service
+#   5. Wait for postgres pod to be ready
+#   6. Copy client certs into the teleport namespace so Teleport can use them
+
+- name: Apply postgres namespace
+  ansible.builtin.command:
+    cmd: kubectl apply -f /home/ubuntu/ansible/roles/postgres/files/namespace.yaml
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  changed_when: true
+
+- name: Apply RBAC for cert-gen job
+  ansible.builtin.command:
+    cmd: kubectl apply -f /home/ubuntu/ansible/roles/postgres/files/postgres-certs-job.yaml
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  changed_when: true
+
+- name: Apply ConfigMaps
+  ansible.builtin.command:
+    cmd: kubectl apply -f {{ item }}
+  loop:
+    - /home/ubuntu/ansible/roles/postgres/files/postgres-config.yaml
+    - /home/ubuntu/ansible/roles/postgres/files/pg-hba-config.yaml
+    - /home/ubuntu/ansible/roles/postgres/files/init-sql.yaml
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  changed_when: true
+
+- name: Apply postgres admin secret
+  ansible.builtin.shell:
+    cmd: |
+      kubectl create secret generic postgres-secret \
+        -n postgres \
+        --from-literal=POSTGRES_USER=postgres \
+        --from-literal=POSTGRES_PASSWORD="{{ postgres_admin_password }}" \
+        --dry-run=client -o yaml | kubectl apply -f -
+    executable: /bin/bash
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  no_log: true
+  changed_when: true
+
+- name: Wait for cert-gen job to complete
+  ansible.builtin.command:
+    cmd: kubectl wait job/postgres-cert-gen -n postgres --for=condition=complete --timeout=120s
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  changed_when: false
+
+- name: Apply postgres Deployment
+  ansible.builtin.command:
+    cmd: kubectl apply -f /home/ubuntu/ansible/roles/postgres/files/postgres-deployment.yaml
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  changed_when: true
+
+- name: Apply postgres Service
+  ansible.builtin.command:
+    cmd: kubectl apply -f /home/ubuntu/ansible/roles/postgres/files/postgres-svc.yaml
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  changed_when: true
+
+- name: Wait for postgres pod to be ready
+  ansible.builtin.command:
+    cmd: kubectl rollout status deployment/postgres -n postgres --timeout=180s
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  changed_when: false
+
+- name: Ensure teleport namespace exists
+  ansible.builtin.command:
+    cmd: kubectl create namespace teleport
+  register: ns_result
+  failed_when: ns_result.rc != 0 and 'already exists' not in ns_result.stderr
+  changed_when: ns_result.rc == 0
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+
+- name: Get client cert from postgres-certs secret
+  ansible.builtin.command:
+    cmd: kubectl get secret postgres-certs -n postgres -o jsonpath='{.data.client\.crt}'
+  register: client_crt_b64
+  changed_when: false
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+
+- name: Get client key from postgres-certs secret
+  ansible.builtin.command:
+    cmd: kubectl get secret postgres-certs -n postgres -o jsonpath='{.data.client\.key}'
+  register: client_key_b64
+  changed_when: false
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  no_log: true
+
+- name: Get CA cert from postgres-certs secret
+  ansible.builtin.command:
+    cmd: kubectl get secret postgres-certs -n postgres -o jsonpath='{.data.ca\.crt}'
+  register: ca_crt_b64
+  changed_when: false
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+
+- name: Create teleport-pg-client-certs secret in teleport namespace
+  ansible.builtin.shell:
+    cmd: |
+      kubectl create secret generic teleport-pg-client-certs \
+        -n teleport \
+        --from-literal=client.crt="{{ client_crt_b64.stdout | b64decode }}" \
+        --from-literal=client.key="{{ client_key_b64.stdout | b64decode }}" \
+        --from-literal=ca.crt="{{ ca_crt_b64.stdout | b64decode }}" \
+        --dry-run=client -o yaml | kubectl apply -f -
+    executable: /bin/bash
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  no_log: true
+  changed_when: true
+
+- name: Verify postgres is accepting connections
+  ansible.builtin.command:
+    cmd: >
+      kubectl exec -n postgres
+      $(kubectl get pod -n postgres -l app=postgres -o jsonpath='{.items[0].metadata.name}')
+      -- pg_isready -U postgres -d postgres
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  changed_when: false
+  register: pg_ready
+
+- name: Print postgres readiness
+  ansible.builtin.debug:
+    msg: "{{ pg_ready.stdout }}"

@@ -331,13 +331,15 @@ locals {
     mkdir -p "$ANSIBLE_DIR/roles/teleport-rbac/tasks"
     mkdir -p "$ANSIBLE_DIR/roles/teleport-rbac/templates"
     mkdir -p "$ANSIBLE_DIR/roles/teleport-node/tasks"
+    mkdir -p "$ANSIBLE_DIR/roles/postgres/tasks"
+    mkdir -p "$ANSIBLE_DIR/roles/postgres/files"
 
     until curl -fsSL --max-time 5 https://raw.githubusercontent.com > /dev/null 2>&1; do
       echo "Waiting for GitHub to be reachable..."
       sleep 5
     done
 
-    for f in ansible.cfg hosts site.yaml k8s-setup.yaml k8s-master.yaml k8s-workers.yaml teleport.yaml teleport-oidc.yaml teleport-sso.yaml teleport-rbac.yaml teleport-node.yaml; do
+    for f in ansible.cfg hosts site.yaml k8s-setup.yaml k8s-master.yaml k8s-workers.yaml postgres.yaml teleport.yaml teleport-oidc.yaml teleport-sso.yaml teleport-rbac.yaml teleport-node.yaml; do
       echo "Fetching ansible/$f..."
       rm -f "$ANSIBLE_DIR/$f"
       curl -fsSL "$REPO/ansible/$f" -o "$ANSIBLE_DIR/$f" || { echo "ERROR: failed to fetch $f"; exit 1; }
@@ -355,7 +357,15 @@ locals {
       "roles/teleport-rbac/tasks/main.yaml" \
       "roles/teleport-rbac/templates/machine-id-bot.yaml.j2" \
       "roles/teleport-rbac/templates/role-rbac-manager.yaml.j2" \
-      "roles/teleport-node/tasks/main.yaml"; do
+      "roles/teleport-node/tasks/main.yaml" \
+      "roles/postgres/tasks/main.yaml" \
+      "roles/postgres/files/namespace.yaml" \
+      "roles/postgres/files/postgres-certs-job.yaml" \
+      "roles/postgres/files/postgres-config.yaml" \
+      "roles/postgres/files/pg-hba-config.yaml" \
+      "roles/postgres/files/init-sql.yaml" \
+      "roles/postgres/files/postgres-deployment.yaml" \
+      "roles/postgres/files/postgres-svc.yaml"; do
       echo "Fetching ansible/$role_file..."
       rm -f "$ANSIBLE_DIR/$role_file"
       curl -fsSL "$REPO/ansible/$role_file" -o "$ANSIBLE_DIR/$role_file" || { echo "ERROR: failed to fetch $role_file"; exit 1; }
@@ -368,6 +378,7 @@ locals {
     sudo -u ubuntu ansible-playbook "$ANSIBLE_DIR/k8s-setup.yaml"     -i "$ANSIBLE_DIR/hosts" --become
     sudo -u ubuntu ansible-playbook "$ANSIBLE_DIR/k8s-master.yaml"    -i "$ANSIBLE_DIR/hosts" --become
     sudo -u ubuntu ansible-playbook "$ANSIBLE_DIR/k8s-workers.yaml"   -i "$ANSIBLE_DIR/hosts" --become
+    sudo -u ubuntu ansible-playbook "$ANSIBLE_DIR/postgres.yaml"      -i "$ANSIBLE_DIR/hosts" --become
     sudo -u ubuntu ansible-playbook "$ANSIBLE_DIR/teleport.yaml"      -i "$ANSIBLE_DIR/hosts" --become
     sudo -u ubuntu ansible-playbook "$ANSIBLE_DIR/teleport-oidc.yaml" -i "$ANSIBLE_DIR/hosts" --become
     sudo -u ubuntu ansible-playbook "$ANSIBLE_DIR/teleport-sso.yaml"  -i "$ANSIBLE_DIR/hosts" --become
