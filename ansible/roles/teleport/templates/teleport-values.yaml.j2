@@ -33,7 +33,11 @@ auth:
         type: saml
         connector_name: okta
         local_auth: true
-        second_factor: "on"
+        # Use second_factors (plural) — Teleport 18.x deprecates second_factor
+        # Setting both causes a conflict error on startup
+        second_factors:
+          - otp
+          - webauthn
         webauthn:
           rp_id: grant-tam-teleport.gvteleport.com
 
