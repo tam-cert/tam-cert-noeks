@@ -36,7 +36,6 @@ variable "teleport_license" {
   sensitive   = true
 }
 variable "teleport_node_port"              { default = "32443" }
-variable "teleport_health_check_node_port" { default = "32444" }
 variable "github_repo"     { default = "https://raw.githubusercontent.com/grantvoss-teleport/tam-cert-noeks/main" }
 variable "aws_oidc_role_arn" {
   description = "ARN of the existing IAM role for Teleport AWS OIDC integration"
@@ -195,14 +194,6 @@ resource "aws_security_group" "main" {
     description = "Teleport NodePort"
     from_port   = 32443
     to_port     = 32443
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  ingress {
-    description = "NLB health check via healthCheckNodePort"
-    from_port   = 32444
-    to_port     = 32444
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }

@@ -15,9 +15,11 @@ resource "aws_lb" "teleport" {
 }
 
 # ─── Target Group ─────────────────────────────────────────────────────────────
-# Targets all three node IPs on NodePort 30647.
-# Health check uses healthCheckNodePort 30723 — returns 200 only on the node
-# running the proxy pod (externalTrafficPolicy: Local).
+# Targets all three node IPs on NodePort 32443.
+# Health check uses TCP on 32443 — Teleport proxy responds on this port.
+# Previously used healthCheckNodePort 32444 with externalTrafficPolicy: Local,
+# but that requires type: LoadBalancer. With type: NodePort the health check
+# hits the NodePort directly via TCP.
 
 resource "aws_lb_target_group" "teleport" {
   name        = "${var.training_prefix}-teleport-tg"
@@ -28,13 +30,11 @@ resource "aws_lb_target_group" "teleport" {
 
   health_check {
     enabled             = true
-    protocol            = "HTTP"
-    port                = "32444"
-    path                = "/healthz"
+    protocol            = "TCP"
+    port                = "32443"
     healthy_threshold   = 2
     unhealthy_threshold = 2
     interval            = 10
-    matcher             = "200"
   }
 
   lifecycle {
