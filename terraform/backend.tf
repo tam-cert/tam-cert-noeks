@@ -4,3 +4,4 @@ terraform {
     # Do not hardcode bucket/key/region here — they are injected as secrets.
   }
 }
+# deploy trigger: Thu Mar 19 21:09:57 UTC 2026
