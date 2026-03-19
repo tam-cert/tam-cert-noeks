@@ -351,7 +351,6 @@ locals {
       "roles/teleport-node/tasks/main.yaml" \
       "roles/postgres/tasks/main.yaml" \
       "roles/postgres/files/namespace.yaml" \
-      "roles/postgres/files/postgres-certs-job.yaml" \
       "roles/postgres/files/postgres-config.yaml" \
       "roles/postgres/files/pg-hba-config.yaml" \
       "roles/postgres/files/init-sql.yaml" \
