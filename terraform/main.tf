@@ -8,6 +8,10 @@ terraform {
       source  = "hashicorp/tls"
       version = "~> 4.0"
     }
+    random = {
+      source  = "hashicorp/random"
+      version = "~> 3.0"
+    }
     local = {
       source  = "hashicorp/local"
       version = "~> 2.0"
@@ -105,6 +109,14 @@ resource "local_sensitive_file" "private_key" {
   content         = tls_private_key.main.private_key_pem
   filename        = "${path.module}/${var.key_pair_name}.pem"
   file_permission = "0600"
+}
+
+# ─── Postgres Admin Password ────────────────────────────────────────────────
+
+resource "random_password" "postgres_admin" {
+  length           = 24
+  special          = true
+  override_special = "!#$%&*-_=+?"
 }
 
 # ─── AMI Lookup ───────────────────────────────────────────────────────────────
@@ -294,6 +306,7 @@ locals {
     printf 'export OKTA_GROUPS_EDITOR=%s\n' "${var.okta_groups_editor}" >> /home/ubuntu/.teleport-env
     printf 'export OKTA_GROUPS_ACCESS=%s\n' "${var.okta_groups_access}" >> /home/ubuntu/.teleport-env
     printf 'export GITHUB_REPOSITORY=grantvoss-teleport/tam-cert-noeks\n' >> /home/ubuntu/.teleport-env
+    printf 'export POSTGRES_ADMIN_PASSWORD=%s\n' "${random_password.postgres_admin.result}" >> /home/ubuntu/.teleport-env
     touch /home/ubuntu/.teleport-env
     chmod 600 /home/ubuntu/.teleport-env
     chown ubuntu:ubuntu /home/ubuntu/.teleport-env
@@ -365,15 +378,19 @@ locals {
     cp "$ANSIBLE_DIR/ansible.cfg" /home/ubuntu/.ansible.cfg
 
     # ── Run Ansible playbooks ────────────────────────────────────────────────
-    sudo -u ubuntu ansible-playbook "$ANSIBLE_DIR/k8s-setup.yaml"     -i "$ANSIBLE_DIR/hosts" --become
-    sudo -u ubuntu ansible-playbook "$ANSIBLE_DIR/k8s-master.yaml"    -i "$ANSIBLE_DIR/hosts" --become
-    sudo -u ubuntu ansible-playbook "$ANSIBLE_DIR/k8s-workers.yaml"   -i "$ANSIBLE_DIR/hosts" --become
-    sudo -u ubuntu ansible-playbook "$ANSIBLE_DIR/postgres.yaml"      -i "$ANSIBLE_DIR/hosts" --become
-    sudo -u ubuntu ansible-playbook "$ANSIBLE_DIR/teleport.yaml"      -i "$ANSIBLE_DIR/hosts" --become
-    sudo -u ubuntu ansible-playbook "$ANSIBLE_DIR/teleport-oidc.yaml" -i "$ANSIBLE_DIR/hosts" --become
-    sudo -u ubuntu ansible-playbook "$ANSIBLE_DIR/teleport-sso.yaml"  -i "$ANSIBLE_DIR/hosts" --become
-    sudo -u ubuntu ansible-playbook "$ANSIBLE_DIR/teleport-rbac.yaml" -i "$ANSIBLE_DIR/hosts" --become
-    sudo -u ubuntu ansible-playbook "$ANSIBLE_DIR/teleport-node.yaml" -i "$ANSIBLE_DIR/hosts" --become
+    # Source env vars so ansible-playbook picks them up (non-interactive shell
+    # does not load .bashrc, so we must export explicitly)
+    set -a; source /home/ubuntu/.teleport-env; set +a
+
+    sudo -E -u ubuntu ansible-playbook "$ANSIBLE_DIR/k8s-setup.yaml"     -i "$ANSIBLE_DIR/hosts" --become
+    sudo -E -u ubuntu ansible-playbook "$ANSIBLE_DIR/k8s-master.yaml"    -i "$ANSIBLE_DIR/hosts" --become
+    sudo -E -u ubuntu ansible-playbook "$ANSIBLE_DIR/k8s-workers.yaml"   -i "$ANSIBLE_DIR/hosts" --become
+    sudo -E -u ubuntu ansible-playbook "$ANSIBLE_DIR/postgres.yaml"      -i "$ANSIBLE_DIR/hosts" --become
+    sudo -E -u ubuntu ansible-playbook "$ANSIBLE_DIR/teleport.yaml"      -i "$ANSIBLE_DIR/hosts" --become
+    sudo -E -u ubuntu ansible-playbook "$ANSIBLE_DIR/teleport-oidc.yaml" -i "$ANSIBLE_DIR/hosts" --become
+    sudo -E -u ubuntu ansible-playbook "$ANSIBLE_DIR/teleport-sso.yaml"  -i "$ANSIBLE_DIR/hosts" --become
+    sudo -E -u ubuntu ansible-playbook "$ANSIBLE_DIR/teleport-rbac.yaml" -i "$ANSIBLE_DIR/hosts" --become
+    sudo -E -u ubuntu ansible-playbook "$ANSIBLE_DIR/teleport-node.yaml" -i "$ANSIBLE_DIR/hosts" --become
   EOT
 
   worker_userdata = <<-EOT
