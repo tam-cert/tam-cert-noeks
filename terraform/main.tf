@@ -119,6 +119,12 @@ resource "random_password" "postgres_admin" {
   override_special = "!#%&*-_=+?"  # no $ (shell interp) or ' (breaks single-quote wrapping in .teleport-env)
 }
 
+resource "random_password" "access_graph_db" {
+  length           = 24
+  special          = true
+  override_special = "!#%&*-_=+?"  # same safe set as postgres_admin
+}
+
 # ─── AMI Lookup ───────────────────────────────────────────────────────────────
 
 data "aws_ami" "ubuntu" {
@@ -307,6 +313,7 @@ locals {
     printf 'export OKTA_GROUPS_ACCESS=%s\n' "${var.okta_groups_access}" >> /home/ubuntu/.teleport-env
     printf 'export GITHUB_REPOSITORY=grantvoss-teleport/tam-cert-noeks\n' >> /home/ubuntu/.teleport-env
     printf "export POSTGRES_ADMIN_PASSWORD='%s'\n" "${random_password.postgres_admin.result}" >> /home/ubuntu/.teleport-env
+    printf "export ACCESS_GRAPH_DB_PASSWORD='%s'\n" "${random_password.access_graph_db.result}" >> /home/ubuntu/.teleport-env
     touch /home/ubuntu/.teleport-env
     chmod 600 /home/ubuntu/.teleport-env
     chown ubuntu:ubuntu /home/ubuntu/.teleport-env
@@ -337,13 +344,15 @@ locals {
     mkdir -p "$ANSIBLE_DIR/roles/teleport-node/tasks"
     mkdir -p "$ANSIBLE_DIR/roles/postgres/tasks"
     mkdir -p "$ANSIBLE_DIR/roles/postgres/files"
+    mkdir -p "$ANSIBLE_DIR/roles/access-graph/tasks"
+    mkdir -p "$ANSIBLE_DIR/roles/access-graph/templates"
 
     until curl -fsSL --max-time 5 https://raw.githubusercontent.com > /dev/null 2>&1; do
       echo "Waiting for GitHub to be reachable..."
       sleep 5
     done
 
-    for f in ansible.cfg hosts site.yaml k8s-setup.yaml k8s-master.yaml k8s-workers.yaml postgres.yaml teleport.yaml teleport-oidc.yaml teleport-sso.yaml teleport-rbac.yaml teleport-node.yaml; do
+    for f in ansible.cfg hosts site.yaml k8s-setup.yaml k8s-master.yaml k8s-workers.yaml postgres.yaml teleport.yaml access-graph.yaml teleport-oidc.yaml teleport-sso.yaml teleport-rbac.yaml teleport-node.yaml; do
       echo "Fetching ansible/$f..."
       rm -f "$ANSIBLE_DIR/$f"
       curl -fsSL "$REPO/ansible/$f" -o "$ANSIBLE_DIR/$f" || { echo "ERROR: failed to fetch $f"; exit 1; }
@@ -368,7 +377,9 @@ locals {
       "roles/postgres/files/pg-hba-config.yaml" \
       "roles/postgres/files/init-sql.yaml" \
       "roles/postgres/files/postgres-deployment.yaml" \
-      "roles/postgres/files/postgres-svc.yaml"; do
+      "roles/postgres/files/postgres-svc.yaml" \
+      "roles/access-graph/tasks/main.yaml" \
+      "roles/access-graph/templates/tag-values.yaml.j2"; do
       echo "Fetching ansible/$role_file..."
       rm -f "$ANSIBLE_DIR/$role_file"
       curl -fsSL "$REPO/ansible/$role_file" -o "$ANSIBLE_DIR/$role_file" || { echo "ERROR: failed to fetch $role_file"; exit 1; }
@@ -387,6 +398,7 @@ locals {
     sudo -E -u ubuntu ansible-playbook "$ANSIBLE_DIR/k8s-workers.yaml"   -i "$ANSIBLE_DIR/hosts" --become
     sudo -E -u ubuntu ansible-playbook "$ANSIBLE_DIR/postgres.yaml"      -i "$ANSIBLE_DIR/hosts" --become
     sudo -E -u ubuntu ansible-playbook "$ANSIBLE_DIR/teleport.yaml"      -i "$ANSIBLE_DIR/hosts" --become
+    sudo -E -u ubuntu ansible-playbook "$ANSIBLE_DIR/access-graph.yaml"  -i "$ANSIBLE_DIR/hosts" --become
     sudo -E -u ubuntu ansible-playbook "$ANSIBLE_DIR/teleport-oidc.yaml" -i "$ANSIBLE_DIR/hosts" --become
     sudo -E -u ubuntu ansible-playbook "$ANSIBLE_DIR/teleport-sso.yaml"  -i "$ANSIBLE_DIR/hosts" --become
     sudo -E -u ubuntu ansible-playbook "$ANSIBLE_DIR/teleport-rbac.yaml" -i "$ANSIBLE_DIR/hosts" --become

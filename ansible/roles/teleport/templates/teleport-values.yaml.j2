@@ -43,15 +43,27 @@ auth:
           - "postgresql://teleport@postgres-service.postgres.svc.cluster.local:5432/teleport_audit?sslmode=verify-full&sslcert=/pg-certs/client.crt&sslkey=/pg-certs/client.key&sslrootcert=/pg-certs/ca.crt&pool_max_conns=10"
         audit_sessions_uri: "s3://{{ sessions_bucket }}/sessions?region=us-west-2"
 
+    # ── Identity Security / Access Graph ──────────────────────────────────────
+    access_graph:
+      enabled: true
+      endpoint: teleport-access-graph.teleport-access-graph.svc.cluster.local:443
+      ca: /var/run/access-graph/ca.pem
+
   extraVolumes:
     - name: pg-client-certs
       secret:
         secretName: teleport-pg-client-certs
         defaultMode: 0600
+    - name: tag-ca
+      configMap:
+        name: teleport-access-graph-ca
 
   extraVolumeMounts:
     - name: pg-client-certs
       mountPath: /pg-certs
+      readOnly: true
+    - name: tag-ca
+      mountPath: /var/run/access-graph
       readOnly: true
 
 proxy:

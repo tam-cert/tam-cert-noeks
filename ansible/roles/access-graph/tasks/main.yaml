@@ -1,0 +1,300 @@
+---
+# access-graph/tasks/main.yaml
+# Deploys Teleport Identity Security / Access Graph via Helm.
+# Sequence:
+#   1. Create teleport-access-graph namespace
+#   2. Generate TLS cert for the Access Graph service (openssl on master)
+#   3. Create k8s TLS secret from generated cert
+#   4. Provision access_graph_user + access_graph_db in postgres
+#   5. Create postgres URI secret
+#   6. Retrieve Teleport host CA
+#   7. Template and install teleport-access-graph Helm chart
+#   8. Create ConfigMap with Access Graph CA cert
+#   9. Patch teleport-cluster Helm values with access_graph config + CA volume
+#  10. Helm upgrade teleport-cluster, restart proxy
+
+# ── Namespace ─────────────────────────────────────────────────────────────────
+
+- name: Create teleport-access-graph namespace
+  ansible.builtin.command:
+    cmd: kubectl create namespace teleport-access-graph
+  register: ag_ns_result
+  failed_when: ag_ns_result.rc != 0 and 'already exists' not in ag_ns_result.stderr
+  changed_when: ag_ns_result.rc == 0
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+
+# ── TLS certificate generation ────────────────────────────────────────────────
+# Generates a self-signed CA and server cert for the Access Graph service.
+# SAN must include the in-cluster FQDN of the service.
+
+- name: Check if access-graph TLS secret already exists
+  ansible.builtin.command:
+    cmd: kubectl get secret teleport-access-graph-tls -n teleport-access-graph
+  register: ag_tls_check
+  failed_when: false
+  changed_when: false
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+
+- name: Create cert working directory
+  ansible.builtin.file:
+    path: /tmp/ag-certs
+    state: directory
+    mode: "0700"
+  when: ag_tls_check.rc != 0
+
+- name: Generate Access Graph CA key and cert
+  ansible.builtin.shell:
+    cmd: |
+      openssl genrsa -out /tmp/ag-certs/ca.key 4096
+      openssl req -x509 -new -key /tmp/ag-certs/ca.key -sha256 -days 3652 \
+        -out /tmp/ag-certs/ca.crt \
+        -subj '/CN=access-graph-ca'
+    executable: /bin/bash
+  when: ag_tls_check.rc != 0
+  changed_when: true
+
+- name: Generate Access Graph server cert
+  ansible.builtin.shell:
+    cmd: |
+      openssl req -new -out /tmp/ag-certs/cert.csr \
+        -newkey rsa:4096 -nodes -keyout /tmp/ag-certs/cert.key \
+        -subj '/CN=Access Graph'
+      openssl x509 -req \
+        -in /tmp/ag-certs/cert.csr \
+        -CA /tmp/ag-certs/ca.crt \
+        -CAkey /tmp/ag-certs/ca.key \
+        -CAcreateserial \
+        -out /tmp/ag-certs/cert.crt \
+        -days 3652 -sha256 \
+        -extfile <(printf 'extendedKeyUsage = serverAuth, clientAuth\nsubjectAltName = DNS:teleport-access-graph.teleport-access-graph.svc.cluster.local')
+    executable: /bin/bash
+  when: ag_tls_check.rc != 0
+  changed_when: true
+
+- name: Create TLS secret for Access Graph
+  ansible.builtin.command:
+    cmd: >
+      kubectl create secret tls teleport-access-graph-tls
+      -n teleport-access-graph
+      --cert=/tmp/ag-certs/cert.crt
+      --key=/tmp/ag-certs/cert.key
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  when: ag_tls_check.rc != 0
+  changed_when: true
+
+
+# ── Postgres: access_graph user + database ────────────────────────────────────
+# Creates a dedicated user and database for Access Graph inside the existing
+# in-cluster postgres pod. The access_graph_user connects with password auth
+# (pg_hba.conf allows cert auth only for the 'teleport' user; all others use md5).
+
+- name: Check if access_graph_db already exists
+  ansible.builtin.shell:
+    cmd: |
+      kubectl exec -n postgres \
+        $(kubectl get pod -n postgres -l app=postgres -o jsonpath='{.items[0].metadata.name}') \
+        -- psql -U postgres -tAc "SELECT 1 FROM pg_database WHERE datname='access_graph_db'"
+    executable: /bin/bash
+  register: ag_db_check
+  changed_when: false
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+
+- name: Create access_graph_user and access_graph_db in postgres
+  ansible.builtin.shell:
+    cmd: |
+      kubectl exec -n postgres \
+        $(kubectl get pod -n postgres -l app=postgres -o jsonpath='{.items[0].metadata.name}') \
+        -- psql -U postgres -c "
+          DO \$\$
+          BEGIN
+            IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'access_graph_user') THEN
+              CREATE USER access_graph_user WITH LOGIN PASSWORD '{{ access_graph_db_password }}';
+            ELSE
+              ALTER USER access_graph_user WITH PASSWORD '{{ access_graph_db_password }}';
+            END IF;
+          END
+          \$\$;
+          SELECT 'CREATE DATABASE access_graph_db OWNER access_graph_user'
+          WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'access_graph_db')\gexec
+          GRANT ALL PRIVILEGES ON DATABASE access_graph_db TO access_graph_user;
+        "
+    executable: /bin/bash
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  when: ag_db_check.stdout != '1'
+  no_log: true
+  changed_when: true
+
+- name: Grant schema privileges to access_graph_user on access_graph_db
+  ansible.builtin.shell:
+    cmd: |
+      kubectl exec -n postgres \
+        $(kubectl get pod -n postgres -l app=postgres -o jsonpath='{.items[0].metadata.name}') \
+        -- psql -U postgres -d access_graph_db -c "
+          GRANT CREATE ON SCHEMA public TO access_graph_user;
+          GRANT CREATE ON DATABASE access_graph_db TO access_graph_user;
+        "
+    executable: /bin/bash
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  changed_when: true
+
+- name: Create postgres URI secret for Access Graph
+  ansible.builtin.shell:
+    cmd: |
+      kubectl create secret generic teleport-access-graph-postgres \
+        -n teleport-access-graph \
+        --from-literal=uri="postgres://access_graph_user:{{ access_graph_db_password }}@postgres-service.postgres.svc.cluster.local:5432/access_graph_db?sslmode=require" \
+        --dry-run=client -o yaml | kubectl apply -f -
+    executable: /bin/bash
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  no_log: true
+  changed_when: true
+
+
+# ── Teleport Host CA ──────────────────────────────────────────────────────────
+# Access Graph needs the Teleport host CA to verify the Auth Service TLS cert.
+
+- name: Retrieve Teleport host CA certificate
+  ansible.builtin.uri:
+    url: "https://grant-tam-teleport.gvteleport.com/webapi/auth/export?type=tls-host"
+    return_content: true
+    validate_certs: false
+  register: teleport_host_ca
+  changed_when: false
+
+- name: Ensure cert working directory exists for CA storage
+  ansible.builtin.file:
+    path: /tmp/ag-certs
+    state: directory
+    mode: "0700"
+
+- name: Store Teleport host CA cert for Access Graph Helm values
+  ansible.builtin.copy:
+    content: "{{ teleport_host_ca.content }}"
+    dest: /tmp/ag-certs/teleport-host-ca.pem
+    mode: "0644"
+
+# On re-runs the TLS secret already exists so cert generation was skipped.
+# Extract the CA cert from the existing ConfigMap if ca.crt is not on disk.
+- name: Check if Access Graph CA cert is on disk
+  ansible.builtin.stat:
+    path: /tmp/ag-certs/ca.crt
+  register: ag_ca_stat
+
+- name: Extract Access Graph CA from existing ConfigMap (re-run path)
+  ansible.builtin.shell:
+    cmd: |
+      kubectl get configmap teleport-access-graph-ca -n teleport \
+        -o jsonpath='{.data.ca\.pem}' > /tmp/ag-certs/ca.crt 2>/dev/null || true
+    executable: /bin/bash
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  when: not ag_ca_stat.stat.exists
+  changed_when: false
+
+# ── Helm install: teleport-access-graph ──────────────────────────────────────
+
+- name: Template Access Graph Helm values
+  ansible.builtin.template:
+    src: tag-values.yaml.j2
+    dest: /home/ubuntu/tag-values.yaml
+    owner: ubuntu
+    group: ubuntu
+    mode: "0644"
+
+- name: Install teleport-access-graph Helm chart
+  ansible.builtin.command:
+    cmd: >
+      helm upgrade --install teleport-access-graph teleport/teleport-access-graph
+      --namespace teleport-access-graph
+      --version 18.7.1
+      --values /home/ubuntu/tag-values.yaml
+      --wait
+      --timeout 5m
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  changed_when: true
+
+- name: Wait for Access Graph deployment rollout
+  ansible.builtin.command:
+    cmd: kubectl rollout status deployment/teleport-access-graph -n teleport-access-graph --timeout=300s
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  changed_when: false
+
+# ── Teleport cluster: CA ConfigMap + helm upgrade ────────────────────────────
+# Provides the Access Graph CA to the Teleport Auth Service so it can verify
+# the TLS certificate of the Access Graph service.
+
+# The CA mounted into Teleport auth is the Access Graph's own self-signed CA
+# (so auth can verify the Access Graph service TLS cert).
+# The Teleport host CA goes into tag-values.yaml for the Access Graph chart
+# (so Access Graph can verify the Teleport Auth Service TLS cert).
+- name: Create Access Graph CA ConfigMap in teleport namespace
+  ansible.builtin.shell:
+    cmd: |
+      kubectl create configmap teleport-access-graph-ca \
+        -n teleport \
+        --from-file=ca.pem=/tmp/ag-certs/ca.crt \
+        --dry-run=client -o yaml | kubectl apply -f -
+    executable: /bin/bash
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  changed_when: true
+
+- name: Remove cert working directory
+  ansible.builtin.file:
+    path: /tmp/ag-certs
+    state: absent
+
+- name: Upgrade teleport-cluster Helm chart with Access Graph config
+  ansible.builtin.command:
+    cmd: >
+      helm upgrade teleport teleport/teleport-cluster
+      --namespace teleport
+      --version 18.7.1
+      --values /home/ubuntu/teleport-values.yaml
+      --wait
+      --timeout 10m
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  changed_when: true
+
+- name: Wait for Teleport auth rollout after upgrade
+  ansible.builtin.command:
+    cmd: kubectl rollout status deployment/teleport-auth -n teleport --timeout=300s
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  changed_when: false
+
+- name: Restart Teleport proxy after Auth upgrade
+  ansible.builtin.command:
+    cmd: kubectl rollout restart deployment/teleport-proxy -n teleport
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  changed_when: true
+
+- name: Wait for Teleport proxy rollout
+  ansible.builtin.command:
+    cmd: kubectl rollout status deployment/teleport-proxy -n teleport --timeout=300s
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  changed_when: false
+
+- name: Print Access Graph deployment status
+  ansible.builtin.command:
+    cmd: kubectl get pods -n teleport-access-graph
+  register: ag_pods
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  changed_when: false
+
+- name: Show Access Graph pods
+  ansible.builtin.debug:
+    msg: "{{ ag_pods.stdout_lines }}"

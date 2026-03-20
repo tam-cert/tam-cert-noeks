@@ -1,0 +1,9 @@
+---
+- name: Deploy Teleport Identity Security / Access Graph
+  hosts: master
+  become: false
+  remote_user: ubuntu
+  vars:
+    access_graph_db_password: "{{ lookup('env', 'ACCESS_GRAPH_DB_PASSWORD') | default('changeme-replace-in-production', true) }}"
+  roles:
+    - access-graph

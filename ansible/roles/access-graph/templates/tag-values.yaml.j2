@@ -1,0 +1,10 @@
+postgres:
+  secretName: "teleport-access-graph-postgres"
+
+tls:
+  existingSecretName: "teleport-access-graph-tls"
+
+clusterHostCAs:
+  # Teleport host CA — retrieved at deploy time from the cluster webapi
+  - |
+{{ teleport_host_ca.content | indent(4, True) }}

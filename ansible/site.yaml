@@ -4,7 +4,8 @@
 - import_playbook: k8s-workers.yaml     # 3 - dynamic kubeadm join
 - import_playbook: postgres.yaml        # 4 - in-cluster PostgreSQL pod + cert generation
 - import_playbook: teleport.yaml        # 5 - Teleport Enterprise Helm install
-- import_playbook: teleport-oidc.yaml   # 6 - AWS OIDC integration resource
-- import_playbook: teleport-sso.yaml    # 7 - Okta SAML connector (bootstrap only)
-- import_playbook: teleport-rbac.yaml   # 8 - Machine ID bot + rbac-manager role + join token
-- import_playbook: teleport-node.yaml   # 9 - AWS IAM join token for ssh-node-1
+- import_playbook: access-graph.yaml    # 6 - Teleport Identity Security / Access Graph
+- import_playbook: teleport-oidc.yaml   # 7 - AWS OIDC integration resource
+- import_playbook: teleport-sso.yaml    # 8 - Okta SAML connector (bootstrap only)
+- import_playbook: teleport-rbac.yaml   # 9 - Machine ID bot + rbac-manager role + join token
+- import_playbook: teleport-node.yaml   # 10 - AWS IAM join token for ssh-node-1
