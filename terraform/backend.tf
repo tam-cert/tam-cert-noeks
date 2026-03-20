@@ -6,3 +6,4 @@ terraform {
 }
 # deploy trigger: Thu Mar 19 21:09:57 UTC 2026
 # 2026-03-19T21:45:35Z
+# fresh apply after environment destroy: 2026-03-20
