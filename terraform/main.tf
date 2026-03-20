@@ -116,7 +116,7 @@ resource "local_sensitive_file" "private_key" {
 resource "random_password" "postgres_admin" {
   length           = 24
   special          = true
-  override_special = "!#$%&*-_=+?"
+  override_special = "!#%&*-_=+?"  # no $ (shell interp) or ' (breaks single-quote wrapping in .teleport-env)
 }
 
 # ─── AMI Lookup ───────────────────────────────────────────────────────────────
@@ -306,7 +306,7 @@ locals {
     printf 'export OKTA_GROUPS_EDITOR=%s\n' "${var.okta_groups_editor}" >> /home/ubuntu/.teleport-env
     printf 'export OKTA_GROUPS_ACCESS=%s\n' "${var.okta_groups_access}" >> /home/ubuntu/.teleport-env
     printf 'export GITHUB_REPOSITORY=grantvoss-teleport/tam-cert-noeks\n' >> /home/ubuntu/.teleport-env
-    printf 'export POSTGRES_ADMIN_PASSWORD=%s\n' "${random_password.postgres_admin.result}" >> /home/ubuntu/.teleport-env
+    printf "export POSTGRES_ADMIN_PASSWORD='%s'\n" "${random_password.postgres_admin.result}" >> /home/ubuntu/.teleport-env
     touch /home/ubuntu/.teleport-env
     chmod 600 /home/ubuntu/.teleport-env
     chown ubuntu:ubuntu /home/ubuntu/.teleport-env
