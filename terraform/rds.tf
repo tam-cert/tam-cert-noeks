@@ -47,7 +47,13 @@ resource "aws_iam_role_policy" "s3_sessions" {
         "s3:PutObject",
         "s3:GetObject",
         "s3:DeleteObject",
-        "s3:ListBucket"
+        "s3:ListBucket",
+        "s3:ListBucketMultipartUploads",
+        "s3:CreateMultipartUpload",
+        "s3:UploadPart",
+        "s3:CompleteMultipartUpload",
+        "s3:AbortMultipartUpload",
+        "s3:ListMultipartUploadParts"
       ]
       Resource = [
         aws_s3_bucket.teleport_sessions.arn,
