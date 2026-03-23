@@ -103,31 +103,65 @@
   environment:
     KUBECONFIG: /home/ubuntu/.kube/config
 
-- name: Create access_graph_user and access_graph_db in postgres
+- name: Write postgres setup SQL to temp file
+  ansible.builtin.copy:
+    dest: /tmp/ag-setup.sql
+    mode: "0600"
+    content: |
+      DO $
+      BEGIN
+        IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'access_graph_user') THEN
+          CREATE USER access_graph_user WITH LOGIN PASSWORD '{{ access_graph_db_password | replace("'", "''") }}';
+        ELSE
+          ALTER USER access_graph_user WITH PASSWORD '{{ access_graph_db_password | replace("'", "''") }}';
+        END IF;
+      END
+      $;
+      SELECT 'CREATE DATABASE access_graph_db OWNER access_graph_user'
+      WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'access_graph_db')\gexec
+      GRANT ALL PRIVILEGES ON DATABASE access_graph_db TO access_graph_user;
+  no_log: true
+  when: ag_db_check.stdout != '1'
+
+- name: Copy SQL file into postgres pod
   ansible.builtin.shell:
     cmd: |
-      kubectl exec -n postgres \
-        $(kubectl get pod -n postgres -l app=postgres -o jsonpath='{.items[0].metadata.name}') \
-        -- psql -U postgres -c "
-          DO \$\$
-          BEGIN
-            IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'access_graph_user') THEN
-              CREATE USER access_graph_user WITH LOGIN PASSWORD '{{ access_graph_db_password }}';
-            ELSE
-              ALTER USER access_graph_user WITH PASSWORD '{{ access_graph_db_password }}';
-            END IF;
-          END
-          \$\$;
-          SELECT 'CREATE DATABASE access_graph_db OWNER access_graph_user'
-          WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'access_graph_db')\gexec
-          GRANT ALL PRIVILEGES ON DATABASE access_graph_db TO access_graph_user;
-        "
+      PG_POD=$(kubectl get pod -n postgres -l app=postgres \
+        -o jsonpath='{.items[0].metadata.name}')
+      kubectl cp /tmp/ag-setup.sql postgres/${PG_POD}:/tmp/ag-setup.sql
     executable: /bin/bash
   environment:
     KUBECONFIG: /home/ubuntu/.kube/config
   when: ag_db_check.stdout != '1'
   no_log: true
   changed_when: true
+
+- name: Create access_graph_user and access_graph_db in postgres
+  ansible.builtin.shell:
+    cmd: |
+      PG_POD=$(kubectl get pod -n postgres -l app=postgres \
+        -o jsonpath='{.items[0].metadata.name}')
+      kubectl exec -n postgres ${PG_POD} \
+        -- psql -U postgres -f /tmp/ag-setup.sql
+    executable: /bin/bash
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  when: ag_db_check.stdout != '1'
+  no_log: true
+  changed_when: true
+
+- name: Remove SQL temp files
+  ansible.builtin.shell:
+    cmd: |
+      PG_POD=$(kubectl get pod -n postgres -l app=postgres \
+        -o jsonpath='{.items[0].metadata.name}')
+      kubectl exec -n postgres ${PG_POD} -- rm -f /tmp/ag-setup.sql
+      rm -f /tmp/ag-setup.sql
+    executable: /bin/bash
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  when: ag_db_check.stdout != '1'
+  changed_when: false
 
 - name: Grant schema privileges to access_graph_user on access_graph_db
   ansible.builtin.shell:
@@ -143,13 +177,21 @@
     KUBECONFIG: /home/ubuntu/.kube/config
   changed_when: true
 
+- name: Write postgres URI to temp file
+  ansible.builtin.copy:
+    dest: /tmp/ag-db-uri
+    mode: "0600"
+    content: "postgres://access_graph_user:{{ access_graph_db_password | urlencode }}@postgres-service.postgres.svc.cluster.local:5432/access_graph_db?sslmode=require"
+  no_log: true
+
 - name: Create postgres URI secret for Access Graph
   ansible.builtin.shell:
     cmd: |
       kubectl create secret generic teleport-access-graph-postgres \
         -n teleport-access-graph \
-        --from-literal=uri="postgres://access_graph_user:{{ access_graph_db_password }}@postgres-service.postgres.svc.cluster.local:5432/access_graph_db?sslmode=require" \
+        --from-literal=uri="$(cat /tmp/ag-db-uri)" \
         --dry-run=client -o yaml | kubectl apply -f -
+      rm -f /tmp/ag-db-uri
     executable: /bin/bash
   environment:
     KUBECONFIG: /home/ubuntu/.kube/config
