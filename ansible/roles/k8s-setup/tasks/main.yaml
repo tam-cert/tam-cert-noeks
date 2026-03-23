@@ -1,4 +1,19 @@
 ---
+- name: Kill any running apt/dpkg processes (they will have been spawned by cloud-init timers)
+  ansible.builtin.shell:
+    cmd: |
+      systemctl stop unattended-upgrades apt-daily.service apt-daily-upgrade.service 2>/dev/null || true
+      systemctl kill --kill-who=all apt-daily.service apt-daily-upgrade.service 2>/dev/null || true
+      while fuser /var/lib/dpkg/lock-frontend /var/lib/apt/lists/lock \
+                  /var/lib/dpkg/lock /var/cache/apt/archives/lock >/dev/null 2>&1; do
+        echo "Waiting for apt lock to clear..."
+        sleep 5
+      done
+      dpkg --configure -a 2>/dev/null || true
+    executable: /bin/bash
+  become: true
+  changed_when: false
+
 - name: Install prerequisite packages
   ansible.builtin.apt:
     name:
@@ -8,6 +23,7 @@
       - gnupg
     state: present
     update_cache: true
+    lock_timeout: 120
 
 - name: Create /etc/apt/keyrings directory
   ansible.builtin.file:
@@ -37,12 +53,14 @@
   ansible.builtin.apt:
     name: containerd
     state: absent
+    lock_timeout: 120
 
 - name: Install containerd.io 2.x from Docker repo
   ansible.builtin.apt:
     name: containerd.io
     state: present
     update_cache: true
+    lock_timeout: 120
 
 - name: Remove default containerd config if present
   ansible.builtin.file:
@@ -105,15 +123,14 @@
       - kubectl
     state: present
     update_cache: true
+    lock_timeout: 120
 
 - name: Hold Kubernetes packages at current version
-  ansible.builtin.dpkg_selections:
-    name: "{{ item }}"
-    selection: hold
-  loop:
-    - kubelet
-    - kubeadm
-    - kubectl
+  ansible.builtin.shell:
+    cmd: apt-mark hold kubelet kubeadm kubectl
+    executable: /bin/bash
+  become: true
+  changed_when: true
 
 - name: Enable kubelet (kubeadm will start it)
   ansible.builtin.systemd:
