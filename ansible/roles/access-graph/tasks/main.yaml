@@ -253,6 +253,23 @@
     path: /tmp/ag-certs
     state: absent
 
+# Explicitly restart auth before the helm upgrade — auth may be crash-looping
+# from the initial install where ca.pem didn't exist yet. The restart picks up
+# the now-populated tag-ca ConfigMap and clears the error before upgrade.
+- name: Restart Teleport auth to pick up Access Graph CA ConfigMap
+  ansible.builtin.command:
+    cmd: kubectl rollout restart deployment/teleport-auth -n teleport
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  changed_when: true
+
+- name: Wait for Teleport auth restart to complete
+  ansible.builtin.command:
+    cmd: kubectl rollout status deployment/teleport-auth -n teleport --timeout=300s
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  changed_when: false
+
 - name: Upgrade teleport-cluster Helm chart with Access Graph config
   ansible.builtin.command:
     cmd: >
