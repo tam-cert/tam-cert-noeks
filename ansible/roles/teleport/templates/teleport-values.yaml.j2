@@ -57,6 +57,7 @@ auth:
     - name: tag-ca
       configMap:
         name: teleport-access-graph-ca
+        optional: true
 
   extraVolumeMounts:
     - name: pg-client-certs
