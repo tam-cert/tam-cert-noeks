@@ -125,23 +125,28 @@
         -o jsonpath='{.items[0].metadata.name}')
       AG_PASS=$(kubectl get secret access-graph-db-secret -n postgres \
         -o jsonpath='{.data.password}' | base64 -d)
-      # -v pass passes the value as a psql variable; :'pass' with %L quoting
-      # safely handles every special character including quotes and backslashes.
-      kubectl exec -n postgres ${PG_POD} \
-        -- psql -U postgres \
-        -v pass="${AG_PASS}" \
-        -c "DO \$\$ BEGIN
-              IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'access_graph_user') THEN
-                EXECUTE format('CREATE USER access_graph_user WITH LOGIN PASSWORD %L', :'pass');
-              ELSE
-                EXECUTE format('ALTER USER access_graph_user WITH PASSWORD %L', :'pass');
-              END IF;
-            END \$\$;"
+      # Pass password via --env into the pod, then use psql \getenv to read it
+      # into a psql variable. SQL is piped via stdin (quoted heredoc) so the
+      # password never appears in any shell arg or process table entry.
+      kubectl exec -i -n postgres ${PG_POD} \
+        --env AG_PASS="${AG_PASS}" \
+        -- psql -U postgres << 'PSQL'
+      \getenv v_pass AG_PASS
+      DO $DO$
+      DECLARE v_pass text := :'v_pass';
+      BEGIN
+        IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'access_graph_user') THEN
+          EXECUTE format('CREATE USER access_graph_user WITH LOGIN PASSWORD %L', v_pass);
+        ELSE
+          EXECUTE format('ALTER USER access_graph_user WITH PASSWORD %L', v_pass);
+        END IF;
+      END
+      $DO$;
+      PSQL
     executable: /bin/bash
   environment:
     KUBECONFIG: /home/ubuntu/.kube/config
   when: ag_db_check.stdout != '1'
-  no_log: true
   changed_when: true
 
 - name: Create access_graph_db and grant privileges
@@ -190,7 +195,6 @@
     executable: /bin/bash
   environment:
     KUBECONFIG: /home/ubuntu/.kube/config
-  no_log: true
   changed_when: true
 
 
