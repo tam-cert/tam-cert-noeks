@@ -87,48 +87,56 @@
 
 
 # ── Postgres: access_graph user + database ────────────────────────────────────
-# Creates a dedicated user and database for Access Graph inside the existing
-# in-cluster postgres pod. The access_graph_user connects with password auth
-# (pg_hba.conf allows cert auth only for the 'teleport' user; all others use md5).
+# Password is stored only in the k8s secret 'access-graph-db-secret'.
+# It never appears in shell args, SQL strings, temp files, or Ansible logs.
+
+- name: Create access-graph-db-secret in postgres namespace
+  ansible.builtin.shell:
+    cmd: |
+      kubectl create secret generic access-graph-db-secret \
+        -n postgres \
+        --from-literal=password="${ACCESS_GRAPH_DB_PASSWORD}" \
+        --dry-run=client -o yaml | kubectl apply -f -
+    executable: /bin/bash
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+    ACCESS_GRAPH_DB_PASSWORD: "{{ access_graph_db_password }}"
+  no_log: true
+  changed_when: true
 
 - name: Check if access_graph_db already exists
   ansible.builtin.shell:
     cmd: |
-      kubectl exec -n postgres \
-        $(kubectl get pod -n postgres -l app=postgres -o jsonpath='{.items[0].metadata.name}') \
-        -- psql -U postgres -tAc "SELECT 1 FROM pg_database WHERE datname='access_graph_db'"
+      PG_POD=$(kubectl get pod -n postgres -l app=postgres \
+        -o jsonpath='{.items[0].metadata.name}')
+      kubectl exec -n postgres ${PG_POD} \
+        -- psql -U postgres -tAc \
+        "SELECT 1 FROM pg_database WHERE datname='access_graph_db'"
     executable: /bin/bash
   register: ag_db_check
   changed_when: false
   environment:
     KUBECONFIG: /home/ubuntu/.kube/config
 
-- name: Write postgres setup SQL to temp file
-  ansible.builtin.copy:
-    dest: /tmp/ag-setup.sql
-    mode: "0600"
-    content: |
-      DO $
-      BEGIN
-        IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'access_graph_user') THEN
-          CREATE USER access_graph_user WITH LOGIN PASSWORD '{{ access_graph_db_password | replace("'", "''") }}';
-        ELSE
-          ALTER USER access_graph_user WITH PASSWORD '{{ access_graph_db_password | replace("'", "''") }}';
-        END IF;
-      END
-      $;
-      SELECT 'CREATE DATABASE access_graph_db OWNER access_graph_user'
-      WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'access_graph_db')\gexec
-      GRANT ALL PRIVILEGES ON DATABASE access_graph_db TO access_graph_user;
-  no_log: true
-  when: ag_db_check.stdout != '1'
-
-- name: Copy SQL file into postgres pod
+- name: Create access_graph_user in postgres
   ansible.builtin.shell:
     cmd: |
       PG_POD=$(kubectl get pod -n postgres -l app=postgres \
         -o jsonpath='{.items[0].metadata.name}')
-      kubectl cp /tmp/ag-setup.sql postgres/${PG_POD}:/tmp/ag-setup.sql
+      AG_PASS=$(kubectl get secret access-graph-db-secret -n postgres \
+        -o jsonpath='{.data.password}' | base64 -d)
+      # -v pass passes the value as a psql variable; :'pass' with %L quoting
+      # safely handles every special character including quotes and backslashes.
+      kubectl exec -n postgres ${PG_POD} \
+        -- psql -U postgres \
+        -v pass="${AG_PASS}" \
+        -c "DO \$\$ BEGIN
+              IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'access_graph_user') THEN
+                EXECUTE format('CREATE USER access_graph_user WITH LOGIN PASSWORD %L', :'pass');
+              ELSE
+                EXECUTE format('ALTER USER access_graph_user WITH PASSWORD %L', :'pass');
+              END IF;
+            END \$\$;"
     executable: /bin/bash
   environment:
     KUBECONFIG: /home/ubuntu/.kube/config
@@ -136,62 +144,49 @@
   no_log: true
   changed_when: true
 
-- name: Create access_graph_user and access_graph_db in postgres
+- name: Create access_graph_db and grant privileges
   ansible.builtin.shell:
     cmd: |
       PG_POD=$(kubectl get pod -n postgres -l app=postgres \
         -o jsonpath='{.items[0].metadata.name}')
       kubectl exec -n postgres ${PG_POD} \
-        -- psql -U postgres -f /tmp/ag-setup.sql
+        -- psql -U postgres -c \
+        "SELECT 'CREATE DATABASE access_graph_db OWNER access_graph_user'
+         WHERE NOT EXISTS
+         (SELECT FROM pg_database WHERE datname = 'access_graph_db')\gexec
+         GRANT ALL PRIVILEGES ON DATABASE access_graph_db TO access_graph_user;"
     executable: /bin/bash
   environment:
     KUBECONFIG: /home/ubuntu/.kube/config
   when: ag_db_check.stdout != '1'
-  no_log: true
   changed_when: true
-
-- name: Remove SQL temp files
-  ansible.builtin.shell:
-    cmd: |
-      PG_POD=$(kubectl get pod -n postgres -l app=postgres \
-        -o jsonpath='{.items[0].metadata.name}')
-      kubectl exec -n postgres ${PG_POD} -- rm -f /tmp/ag-setup.sql
-      rm -f /tmp/ag-setup.sql
-    executable: /bin/bash
-  environment:
-    KUBECONFIG: /home/ubuntu/.kube/config
-  when: ag_db_check.stdout != '1'
-  changed_when: false
 
 - name: Grant schema privileges to access_graph_user on access_graph_db
   ansible.builtin.shell:
     cmd: |
-      kubectl exec -n postgres \
-        $(kubectl get pod -n postgres -l app=postgres -o jsonpath='{.items[0].metadata.name}') \
-        -- psql -U postgres -d access_graph_db -c "
-          GRANT CREATE ON SCHEMA public TO access_graph_user;
-          GRANT CREATE ON DATABASE access_graph_db TO access_graph_user;
-        "
+      PG_POD=$(kubectl get pod -n postgres -l app=postgres \
+        -o jsonpath='{.items[0].metadata.name}')
+      kubectl exec -n postgres ${PG_POD} \
+        -- psql -U postgres -d access_graph_db -c \
+        "GRANT CREATE ON SCHEMA public TO access_graph_user;
+         GRANT CREATE ON DATABASE access_graph_db TO access_graph_user;"
     executable: /bin/bash
   environment:
     KUBECONFIG: /home/ubuntu/.kube/config
   changed_when: true
 
-- name: Write postgres URI to temp file
-  ansible.builtin.copy:
-    dest: /tmp/ag-db-uri
-    mode: "0600"
-    content: "postgres://access_graph_user:{{ access_graph_db_password | urlencode }}@postgres-service.postgres.svc.cluster.local:5432/access_graph_db?sslmode=require"
-  no_log: true
-
-- name: Create postgres URI secret for Access Graph
+- name: Create postgres URI secret for Access Graph from k8s secret
   ansible.builtin.shell:
     cmd: |
+      AG_PASS=$(kubectl get secret access-graph-db-secret -n postgres \
+        -o jsonpath='{.data.password}' | base64 -d)
+      AG_PASS_ENC=$(python3 -c \
+        "import urllib.parse, sys; print(urllib.parse.quote(sys.argv[1], safe=''))" \
+        "${AG_PASS}")
       kubectl create secret generic teleport-access-graph-postgres \
         -n teleport-access-graph \
-        --from-literal=uri="$(cat /tmp/ag-db-uri)" \
+        --from-literal=uri="postgres://access_graph_user:${AG_PASS_ENC}@postgres-service.postgres.svc.cluster.local:5432/access_graph_db?sslmode=require" \
         --dry-run=client -o yaml | kubectl apply -f -
-      rm -f /tmp/ag-db-uri
     executable: /bin/bash
   environment:
     KUBECONFIG: /home/ubuntu/.kube/config
