@@ -125,24 +125,16 @@
         -o jsonpath='{.items[0].metadata.name}')
       AG_PASS=$(kubectl get secret access-graph-db-secret -n postgres \
         -o jsonpath='{.data.password}' | base64 -d)
-      # Pass password via --env into the pod, then use psql \getenv to read it
-      # into a psql variable. SQL is piped via stdin (quoted heredoc) so the
-      # password never appears in any shell arg or process table entry.
-      kubectl exec -i -n postgres ${PG_POD} \
-        --env AG_PASS="${AG_PASS}" \
-        -- psql -U postgres << 'PSQL'
-      \getenv v_pass AG_PASS
-      DO $DO$
-      DECLARE v_pass text := :'v_pass';
-      BEGIN
-        IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'access_graph_user') THEN
-          EXECUTE format('CREATE USER access_graph_user WITH LOGIN PASSWORD %L', v_pass);
-        ELSE
-          EXECUTE format('ALTER USER access_graph_user WITH PASSWORD %L', v_pass);
-        END IF;
-      END
-      $DO$;
-      PSQL
+      # Write SQL using printf so the password is embedded at the shell level
+      # (already retrieved from k8s secret, not from Ansible vars/templates).
+      # SQL-escape single quotes by doubling them before embedding.
+      AG_PASS_SQL=$(printf '%s' "${AG_PASS}" | sed "s/'/''/g")
+      printf "DO \$\$\nBEGIN\n  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'access_graph_user') THEN\n    EXECUTE format('CREATE USER access_graph_user WITH LOGIN PASSWORD %%L', '%s');\n  ELSE\n    EXECUTE format('ALTER USER access_graph_user WITH PASSWORD %%L', '%s');\n  END IF;\nEND\n\$\$;\n" \
+        "${AG_PASS_SQL}" "${AG_PASS_SQL}" > /tmp/ag-user.sql
+      kubectl cp /tmp/ag-user.sql postgres/${PG_POD}:/tmp/ag-user.sql
+      kubectl exec -n postgres ${PG_POD} -- psql -U postgres -f /tmp/ag-user.sql
+      kubectl exec -n postgres ${PG_POD} -- rm -f /tmp/ag-user.sql
+      rm -f /tmp/ag-user.sql
     executable: /bin/bash
   environment:
     KUBECONFIG: /home/ubuntu/.kube/config
