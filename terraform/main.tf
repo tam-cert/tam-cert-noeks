@@ -543,6 +543,15 @@ locals {
     EOF
 
     # ── Enable and start Teleport ────────────────────────────────────────────
+    # Use --insecure since the proxy uses a self-signed cert (ACME rate-limited).
+    # Override ExecStart via a systemd drop-in to add the flag.
+    mkdir -p /etc/systemd/system/teleport.service.d
+    cat <<DROPIN > /etc/systemd/system/teleport.service.d/insecure.conf
+[Service]
+ExecStart=
+ExecStart=/usr/local/bin/teleport start --config /etc/teleport.yaml --pid-file=/run/teleport.pid --insecure
+DROPIN
+    systemctl daemon-reload
     systemctl enable teleport
     systemctl start teleport
 

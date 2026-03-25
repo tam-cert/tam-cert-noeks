@@ -25,10 +25,12 @@
   register: aws_account_id
   changed_when: false
 
-- name: Create AWS IAM join token for ssh-node-1
-  ansible.builtin.shell:
-    cmd: |
-      printf 'kind: token
+- name: Write IAM join token manifest to temp file
+  ansible.builtin.copy:
+    dest: /tmp/ssh-node-iam-token.yaml
+    mode: "0600"
+    content: |
+      kind: token
       version: v2
       metadata:
         name: ssh-node-iam-token
@@ -38,10 +40,15 @@
         join_method: iam
         iam:
           allow:
-            - aws_account: "%s"
-              aws_arn: "arn:aws:sts::%s:assumed-role/grant-tam-ssh-node-role/*"
-      ' "{{ aws_account_id.stdout }}" "{{ aws_account_id.stdout }}" | \
-      kubectl exec -i -n teleport {{ auth_pod.stdout }} -- tctl create -f -
+            - aws_account: "{{ aws_account_id.stdout }}"
+              aws_arn: "arn:aws:sts::{{ aws_account_id.stdout }}:assumed-role/grant-tam-ssh-node-role/*"
+
+- name: Create AWS IAM join token for ssh-node-1
+  ansible.builtin.shell:
+    cmd: |
+      kubectl exec -i -n teleport {{ auth_pod.stdout }} -- tctl create -f - \
+        < /tmp/ssh-node-iam-token.yaml
+      rm -f /tmp/ssh-node-iam-token.yaml
     executable: /bin/bash
   environment:
     KUBECONFIG: /home/ubuntu/.kube/config
