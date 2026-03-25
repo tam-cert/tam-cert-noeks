@@ -46,33 +46,33 @@
   vars:
     github_repository: "{{ lookup('env', 'GITHUB_REPOSITORY') }}"
 
-# ── Copy into auth pod and apply ───────────────────────────────────────────
+# ── Apply directly via stdin — no kubectl cp (auth container is distroless,
+#    no tar available). Pipe rendered YAML into tctl create via kubectl exec -i.
 
-- name: Copy bootstrap manifests into auth pod
-  command: >
-    kubectl cp {{ bootstrap_tmp.path }}/{{ item }}
-    teleport/{{ teleport_auth_pod }}:/tmp/{{ item }}
-  loop:
-    - role-rbac-manager.yaml
-    - machine-id-bot.yaml
-  changed_when: true
-
-- name: Apply rbac-manager role
-  command: >
-    kubectl exec -n teleport {{ teleport_auth_pod }} --
-    tctl create -f /tmp/role-rbac-manager.yaml
+- name: Apply rbac-manager role via stdin
+  ansible.builtin.shell:
+    cmd: |
+      kubectl exec -i -n teleport {{ teleport_auth_pod }} \
+        -- tctl create -f - < {{ bootstrap_tmp.path }}/role-rbac-manager.yaml
+    executable: /bin/bash
   register: r_mgr
   changed_when: "'created' in r_mgr.stdout or 'updated' in r_mgr.stdout"
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
 
-- name: Apply Machine ID bot and join token
-  command: >
-    kubectl exec -n teleport {{ teleport_auth_pod }} --
-    tctl create -f /tmp/machine-id-bot.yaml
+- name: Apply Machine ID bot and join token via stdin
+  ansible.builtin.shell:
+    cmd: |
+      kubectl exec -i -n teleport {{ teleport_auth_pod }} \
+        -- tctl create -f - < {{ bootstrap_tmp.path }}/machine-id-bot.yaml
+    executable: /bin/bash
   register: r_bot
   changed_when: "'created' in r_bot.stdout or 'updated' in r_bot.stdout"
   failed_when:
     - r_bot.rc != 0
     - "'already exists' not in r_bot.stderr"
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
 
 # ── Cleanup ────────────────────────────────────────────────────────────────
 
