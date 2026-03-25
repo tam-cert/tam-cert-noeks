@@ -18,5 +18,9 @@ data:
     # This enforces mutual TLS — Teleport must present a cert signed by our CA
     hostssl all             teleport        all             cert clientcert=verify-full
 
+    # Allow access_graph_user with password over SSL from pod CIDR
+    # Access Graph connects via URI secret (password auth), not client certs
+    hostssl access_graph_db access_graph_user 192.168.0.0/16  scram-sha-256
+
     # Deny all other connections by default
     host    all             all             all             reject
