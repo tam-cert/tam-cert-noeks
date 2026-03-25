@@ -1,0 +1,12 @@
+kind: token
+version: v2
+metadata:
+  name: ssh-node-iam-token
+  expires: "3000-01-01T00:00:00Z"
+spec:
+  roles:
+  - Node
+  join_method: iam
+  allow:
+  - aws_account: "{{ aws_account_id.stdout }}"
+    aws_arn: "arn:aws:sts::{{ aws_account_id.stdout }}:assumed-role/grant-tam-ssh-node-role/*"

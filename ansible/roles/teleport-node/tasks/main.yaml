@@ -4,10 +4,13 @@
 # Creates the AWS IAM join token in Teleport that allows ssh-node-1 to
 # auto-enroll using the AWS IAM join method.
 #
-# The join token specifies which IAM role ARN is allowed to join —
-# only instances running with the ssh-node IAM role can authenticate.
-# No static token is stored anywhere; the node proves identity via
-# a signed sts:GetCallerIdentity response.
+# Strategy: render the token YAML as a ConfigMap in the teleport namespace,
+# patch it as a volume onto the auth deployment, then run tctl create -f
+# against the local file path inside the pod. Avoids kubectl exec -i stdin
+# truncation with distroless containers.
+#
+# Key fix: IAM join tokens use spec.allow (top-level under spec), NOT
+# spec.iam.allow (which is the EC2 join method structure).
 
 - name: Get Teleport auth pod name
   ansible.builtin.command:
@@ -25,24 +28,81 @@
   register: aws_account_id
   changed_when: false
 
-- name: Create AWS IAM join token for ssh-node-1
+# ── Stage token YAML via ConfigMap ────────────────────────────────────────────
+
+- name: Render IAM join token manifest
+  ansible.builtin.template:
+    src: ssh-node-iam-token.yaml.j2
+    dest: /tmp/ssh-node-iam-token.yaml
+    mode: "0600"
+
+- name: Create bootstrap ConfigMap with token YAML
   ansible.builtin.shell:
     cmd: |
-      printf 'kind: token
-      version: v2
-      metadata:
-        name: ssh-node-iam-token
-        expires: "3000-01-01T00:00:00Z"
-      spec:
-        roles: [Node]
-        join_method: iam
-        iam:
-          allow:
-            - aws_account: "%s"
-              aws_arn: "arn:aws:sts::%s:assumed-role/grant-tam-ssh-node-role/*"
-      ' "{{ aws_account_id.stdout }}" "{{ aws_account_id.stdout }}" | \
-      kubectl exec -i -n teleport {{ auth_pod.stdout }} -- tctl create -f -
+      kubectl create configmap teleport-node-bootstrap \
+        -n teleport \
+        --from-file=ssh-node-iam-token.yaml=/tmp/ssh-node-iam-token.yaml \
+        --dry-run=client -o yaml | kubectl apply -f -
     executable: /bin/bash
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  changed_when: true
+
+
+# ── Mount ConfigMap into auth deployment ──────────────────────────────────────
+
+- name: Patch auth deployment to mount bootstrap ConfigMap
+  ansible.builtin.shell:
+    cmd: |
+      kubectl patch deployment teleport-auth -n teleport --type=json -p='[
+        {
+          "op": "add",
+          "path": "/spec/template/spec/volumes/-",
+          "value": {
+            "name": "node-bootstrap",
+            "configMap": {"name": "teleport-node-bootstrap"}
+          }
+        },
+        {
+          "op": "add",
+          "path": "/spec/template/spec/containers/0/volumeMounts/-",
+          "value": {
+            "name": "node-bootstrap",
+            "mountPath": "/tmp/bootstrap",
+            "readOnly": true
+          }
+        }
+      ]'
+    executable: /bin/bash
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  changed_when: true
+
+- name: Wait for auth pod rollout after patch
+  ansible.builtin.command:
+    cmd: kubectl rollout status deployment/teleport-auth -n teleport --timeout=120s
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  changed_when: false
+
+- name: Get new auth pod name after rollout
+  ansible.builtin.command:
+    cmd: >
+      kubectl get pod -n teleport -l app.kubernetes.io/component=auth
+      -o jsonpath='{.items[0].metadata.name}'
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  register: auth_pod_new
+  changed_when: false
+
+
+# ── Apply token via tctl using the mounted file ───────────────────────────────
+
+- name: Create IAM join token via tctl
+  ansible.builtin.command:
+    cmd: >
+      kubectl exec -n teleport {{ auth_pod_new.stdout }} --
+      tctl create -f /tmp/bootstrap/ssh-node-iam-token.yaml
   environment:
     KUBECONFIG: /home/ubuntu/.kube/config
   register: token_result
@@ -51,11 +111,89 @@
     - '"already exists" not in token_result.stderr'
   changed_when: token_result.rc == 0
 
+# ── Cleanup: remove mount and ConfigMap ───────────────────────────────────────
+
+- name: Patch auth deployment to remove bootstrap volume mount
+  ansible.builtin.shell:
+    cmd: |
+      IDX=$(kubectl get deployment teleport-auth -n teleport -o json | \
+        python3 -c "
+      import json, sys
+      d = json.load(sys.stdin)
+      mounts = d['spec']['template']['spec']['containers'][0].get('volumeMounts', [])
+      for i, m in enumerate(mounts):
+          if m['name'] == 'node-bootstrap':
+              print(i)
+              break
+      ")
+      kubectl patch deployment teleport-auth -n teleport --type=json -p="[
+        {\"op\": \"remove\", \"path\": \"/spec/template/spec/containers/0/volumeMounts/${IDX}\"}
+      ]"
+    executable: /bin/bash
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  changed_when: true
+
+- name: Patch auth deployment to remove bootstrap volume
+  ansible.builtin.shell:
+    cmd: |
+      IDX=$(kubectl get deployment teleport-auth -n teleport -o json | \
+        python3 -c "
+      import json, sys
+      d = json.load(sys.stdin)
+      vols = d['spec']['template']['spec'].get('volumes', [])
+      for i, v in enumerate(vols):
+          if v['name'] == 'node-bootstrap':
+              print(i)
+              break
+      ")
+      kubectl patch deployment teleport-auth -n teleport --type=json -p="[
+        {\"op\": \"remove\", \"path\": \"/spec/template/spec/volumes/${IDX}\"}
+      ]"
+    executable: /bin/bash
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  changed_when: true
+
+
+- name: Wait for auth pod rollout after cleanup
+  ansible.builtin.command:
+    cmd: kubectl rollout status deployment/teleport-auth -n teleport --timeout=120s
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  changed_when: false
+
+- name: Delete bootstrap ConfigMap
+  ansible.builtin.command:
+    cmd: kubectl delete configmap teleport-node-bootstrap -n teleport
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  register: cm_delete
+  failed_when: cm_delete.rc != 0 and 'not found' not in cm_delete.stderr
+  changed_when: cm_delete.rc == 0
+
+- name: Remove rendered token manifest from master
+  ansible.builtin.file:
+    path: /tmp/ssh-node-iam-token.yaml
+    state: absent
+
+# ── Verify ────────────────────────────────────────────────────────────────────
+
+- name: Get final auth pod name
+  ansible.builtin.command:
+    cmd: >
+      kubectl get pod -n teleport -l app.kubernetes.io/component=auth
+      -o jsonpath='{.items[0].metadata.name}'
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  register: auth_pod_final
+  changed_when: false
+
 - name: Verify IAM join token was created
   ansible.builtin.command:
     cmd: >
-      kubectl exec -n teleport {{ auth_pod.stdout }}
-      -- tctl tokens ls
+      kubectl exec -n teleport {{ auth_pod_final.stdout }} --
+      tctl tokens ls
   environment:
     KUBECONFIG: /home/ubuntu/.kube/config
   register: token_list
