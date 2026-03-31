@@ -280,19 +280,13 @@
     path: /tmp/teleport-app-argocd.yaml
     state: absent
 
-# ── Deploy teleport-rbac ArgoCD Application ───────────────────────────────────
-# Applies the Application CR so ArgoCD begins syncing the RBAC resources.
-# The Application watches argocd/apps/teleport-rbac/ and runs a PostSync Job
-# that execs tctl create -f into the auth pod for each RBAC YAML file.
+# ── Pre-create teleport-rbac-files ConfigMap with SAML connector ──────────────
+# The SAML connector contains Okta secrets that can't be committed to the repo.
+# We create the full ConfigMap (including the SAML entry) BEFORE applying the
+# ArgoCD Application so that when ArgoCD first syncs, the ConfigMap already
+# exists with the correct content and the PostSync Job can apply everything.
+# ArgoCD will adopt and manage the ConfigMap going forward.
 
-- name: Apply teleport-rbac ArgoCD Application
-  ansible.builtin.command:
-    cmd: kubectl apply -f /home/ubuntu/ansible/argocd/apps/teleport-rbac-app.yaml
-  environment:
-    KUBECONFIG: /home/ubuntu/.kube/config
-  changed_when: true
-
-# ── Load Okta vars from env file for SAML connector patch ─────────────────────
 - name: Source teleport-env to get Okta variables
   ansible.builtin.shell:
     cmd: source /home/ubuntu/.teleport-env && env
@@ -302,28 +296,61 @@
 
 - name: Set Okta facts from env file
   ansible.builtin.set_fact:
-    okta_metadata_url:   "{{ teleport_env_vars.stdout | regex_search('OKTA_METADATA_URL=(.+)', '\\1') | first }}"
-    okta_groups_editor:  "{{ teleport_env_vars.stdout | regex_search('OKTA_GROUPS_EDITOR=(.+)', '\\1') | first }}"
-    okta_groups_access:  "{{ teleport_env_vars.stdout | regex_search('OKTA_GROUPS_ACCESS=(.+)', '\\1') | first }}"
+    okta_metadata_url:  "{{ teleport_env_vars.stdout | regex_search('OKTA_METADATA_URL=(.+)', '\\1') | first }}"
+    okta_groups_editor: "{{ teleport_env_vars.stdout | regex_search('OKTA_GROUPS_EDITOR=(.+)', '\\1') | first }}"
+    okta_groups_access: "{{ teleport_env_vars.stdout | regex_search('OKTA_GROUPS_ACCESS=(.+)', '\\1') | first }}"
 
-# ── Patch teleport-rbac-files ConfigMap with rendered SAML connector ──────────
-# The SAML connector contains Okta secrets (metadata URL, group names) that
-# can't be committed to the repo. We patch them into the ConfigMap here at
-# deploy time so the ArgoCD PostSync Job can apply the full connector
-# (including the base wildcard mapping) in a single tctl create -f pass.
+- name: Write saml-okta.yaml to temp file
+  ansible.builtin.copy:
+    dest: /tmp/saml-okta.yaml
+    mode: "0600"
+    content: |
+      kind: saml
+      version: v2
+      metadata:
+        name: okta
+      spec:
+        display: "Okta"
+        acs: "https://grant-tam-teleport.gvteleport.com/v1/webapi/saml/acs/okta"
+        entity_descriptor_url: "{{ okta_metadata_url }}"
+        attributes_to_roles:
+          - name: "groups"
+            value: "*"
+            roles:
+              - base
+          - name: "groups"
+            value: "{{ okta_groups_editor }}"
+            roles:
+              - editor
+              - access
+          - name: "groups"
+            value: "{{ okta_groups_access }}"
+            roles:
+              - access
 
-- name: Render SAML connector into teleport-rbac-files ConfigMap
+- name: Add saml-okta.yaml to teleport-rbac-files ConfigMap
   ansible.builtin.shell:
     cmd: |
-      kubectl patch configmap teleport-rbac-files -n teleport --type=merge -p "$(cat <<EOF
-      {
-        "data": {
-          "saml-okta.yaml": "kind: saml\nversion: v2\nmetadata:\n  name: okta\nspec:\n  display: \"Okta\"\n  acs: \"https://grant-tam-teleport.gvteleport.com/v1/webapi/saml/acs/okta\"\n  entity_descriptor_url: \"{{ okta_metadata_url }}\"\n  attributes_to_roles:\n    - name: \"groups\"\n      value: \"*\"\n      roles:\n        - base\n    - name: \"groups\"\n      value: \"{{ okta_groups_editor }}\"\n      roles:\n        - editor\n        - access\n    - name: \"groups\"\n      value: \"{{ okta_groups_access }}\"\n      roles:\n        - access\n"
-        }
-      }
-      EOF
-      )"
+      kubectl create configmap teleport-rbac-files -n teleport \
+        --from-file=saml-okta.yaml=/tmp/saml-okta.yaml \
+        --dry-run=client -o yaml | kubectl apply -f -
     executable: /bin/bash
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  changed_when: true
+
+- name: Remove temp saml file
+  ansible.builtin.file:
+    path: /tmp/saml-okta.yaml
+    state: absent
+
+# ── Deploy teleport-rbac ArgoCD Application ───────────────────────────────────
+# Applied AFTER the ConfigMap exists so ArgoCD can adopt it on first sync
+# and the PostSync Job immediately has the saml-okta.yaml entry available.
+
+- name: Apply teleport-rbac ArgoCD Application
+  ansible.builtin.command:
+    cmd: kubectl apply -f /home/ubuntu/ansible/argocd/apps/teleport-rbac-app.yaml
   environment:
     KUBECONFIG: /home/ubuntu/.kube/config
   changed_when: true

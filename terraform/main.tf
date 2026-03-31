@@ -495,104 +495,10 @@ locals {
   EOT
 
   # ── ssh-node-1 cloud-init ──────────────────────────────────────────────────
-  # Installs the Teleport node agent and configures it to join the cluster
-  # automatically using the AWS IAM join method. No static tokens or secrets.
-  # The node calls sts:GetCallerIdentity; Teleport verifies the signed response
-  # matches the allow rules in the ssh-node-iam-token join token.
-  ssh_node_userdata = <<-EOT
-    #!/bin/bash
-    set -euo pipefail
-    exec > >(tee /var/log/cloud-init-teleport.log) 2>&1
-
-    export DEBIAN_FRONTEND=noninteractive
-
-    # ── Wait for apt lock ────────────────────────────────────────────────────
-    systemctl disable --now unattended-upgrades || true
-    systemctl disable --now apt-daily.timer || true
-    systemctl disable --now apt-daily-upgrade.timer || true
-
-    systemd-run --property="After=apt-daily.service apt-daily-upgrade.service" \
-      --wait /bin/true 2>/dev/null || true
-
-    while fuser /var/lib/dpkg/lock-frontend \
-                /var/lib/apt/lists/lock \
-                /var/lib/dpkg/lock \
-                /var/cache/apt/archives/lock >/dev/null 2>&1; do
-      echo "Waiting for apt lock..."
-      sleep 5
-    done
-
-    dpkg --configure -a || true
-    sleep 5
-
-    apt_install() {
-      for i in 1 2 3 4 5; do
-        apt-get "$@" && return 0
-        echo "apt-get failed (attempt $i), retrying in 15s..."
-        sleep 15
-      done
-      return 1
-    }
-
-    apt_install update
-    apt_install install -y curl
-
-    # ── Install Teleport Enterprise ──────────────────────────────────────────
-    curl -fsSL https://cdn.teleport.dev/install-v18.7.1.sh | bash -s 18.7.1 enterprise
-
-    # ── Write Teleport node config ───────────────────────────────────────────
-    # join_method: iam  — uses sts:GetCallerIdentity, no static token
-    # token:            — must match the join token name created by Ansible
-    # labels:           — 'team' must match Okta group for RBAC scoping
-    # Note: written via printf to avoid heredoc indentation issues inside
-    # Terraform's <<-EOT block (<<-EOT strips tabs only, not spaces).
-    printf '%s\n' \
-      'version: v3' \
-      'teleport:' \
-      '  nodename: ssh-node-1' \
-      '  data_dir: /var/lib/teleport' \
-      '  log:' \
-      '    output: stderr' \
-      '    severity: INFO' \
-      '  join_params:' \
-      '    method: iam' \
-      '    token_name: ssh-node-iam-token' \
-      '  proxy_server: grant-tam-teleport.gvteleport.com:443' \
-      '' \
-      'auth_service:' \
-      '  enabled: false' \
-      '' \
-      'proxy_service:' \
-      '  enabled: false' \
-      '' \
-      'ssh_service:' \
-      '  enabled: true' \
-      '  labels:' \
-      '    team: platform' \
-      '    env: demo' \
-      '    node: ssh-node-1' \
-      '  commands:' \
-      '    - name: hostname' \
-      '      command: [hostname]' \
-      '      period: 1m0s' \
-      > /etc/teleport.yaml
-
-    # ── Enable and start Teleport ────────────────────────────────────────────
-    # --insecure is required while the proxy uses a Let's Encrypt staging cert
-    # (staging certs are not trusted by the OS CA store). Remove this drop-in
-    # once acmeURI is switched to production in teleport-values.yaml.j2.
-    mkdir -p /etc/systemd/system/teleport.service.d
-    cat <<DROPIN > /etc/systemd/system/teleport.service.d/insecure.conf
-[Service]
-ExecStart=
-ExecStart=/usr/local/bin/teleport start --config /etc/teleport.yaml --pid-file=/run/teleport.pid --insecure
-DROPIN
-    systemctl daemon-reload
-    systemctl enable teleport
-    systemctl start teleport
-
-    echo "ssh-node-1 Teleport agent started — joining via AWS IAM join method"
-  EOT
+  # Loaded from an external script file to avoid heredoc indentation issues.
+  # Terraform <<-EOT strips leading tabs only; space-indented content leaves a
+  # space on every line including the shebang, which breaks cloud-init execution.
+  ssh_node_userdata = templatefile("${path.module}/scripts/ssh-node-userdata.sh", {})
 }
 
 # ─── EC2 Instances ────────────────────────────────────────────────────────────
