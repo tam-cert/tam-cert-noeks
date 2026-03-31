@@ -11,5 +11,5 @@ spec:
     # Ensures all authenticated users start with zero standing privilege.
     - { name: "groups", value: "*",                      roles: ["base"] }
     # Team-specific mappings preserve existing editor/access grants.
-    - { name: "groups", value: "{{ okta_groups_editor }}", roles: ["editor"] }
+    - { name: "groups", value: "{{ okta_groups_editor }}", roles: ["editor", "access"] }
     - { name: "groups", value: "{{ okta_groups_access }}",  roles: ["access"] }
