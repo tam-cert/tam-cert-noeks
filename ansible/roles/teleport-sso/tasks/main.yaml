@@ -22,14 +22,15 @@
   changed_when: false
 
 # ─── Create initial Okta SAML connector ──────────────────────────────────────
-# Creates a minimal connector so Teleport has a valid SSO config at boot.
-# The teleport-rbac GitHub Actions workflow patches this connector later to
-# add the base role wildcard mapping required for RBAC.
+# Creates a bootstrap connector with editor + access mappings using only
+# built-in Teleport roles (no custom roles exist yet at this step).
+# ArgoCD (step 11) overwrites this with the full connector including the
+# base wildcard mapping once the base role has been created.
 
 - name: Create initial Okta SAML connector
   ansible.builtin.shell:
     cmd: |
-      printf 'kind: saml\nversion: v2\nmetadata:\n  name: okta\nspec:\n  display: "Okta"\n  acs: "https://grant-tam-teleport.gvteleport.com/v1/webapi/saml/acs/okta"\n  entity_descriptor_url: "%s"\n  attributes_to_roles:\n    - name: "groups"\n      value: "*"\n      roles:\n        - base\n    - name: "groups"\n      value: "%s"\n      roles:\n        - editor\n        - access\n    - name: "groups"\n      value: "%s"\n      roles:\n        - access\n' \
+      printf 'kind: saml\nversion: v2\nmetadata:\n  name: okta\nspec:\n  display: "Okta"\n  acs: "https://grant-tam-teleport.gvteleport.com/v1/webapi/saml/acs/okta"\n  entity_descriptor_url: "%s"\n  attributes_to_roles:\n    - name: "groups"\n      value: "%s"\n      roles:\n        - editor\n        - access\n    - name: "groups"\n      value: "%s"\n      roles:\n        - access\n' \
         "{{ okta_metadata_url }}" \
         "{{ okta_groups_editor }}" \
         "{{ okta_groups_access }}" | \

@@ -60,7 +60,8 @@ spec:
                 role-ssh-access.yaml \
                 role-ssh-root-access.yaml \
                 role-auto-approver.yaml \
-                cluster-auth-preference.yaml; do
+                cluster-auth-preference.yaml \
+                saml-okta.yaml; do
                 echo "--- Applying ${f} ---"
                 kubectl exec -n teleport "${AUTH_POD}" -- \
                   tctl create -f "/tmp/rbac-sync/${f}" && echo "${f}: OK" || echo "${f}: WARN (may already exist)"

@@ -292,6 +292,28 @@
     KUBECONFIG: /home/ubuntu/.kube/config
   changed_when: true
 
+# ── Patch teleport-rbac-files ConfigMap with rendered SAML connector ──────────
+# The SAML connector contains Okta secrets (metadata URL, group names) that
+# can't be committed to the repo. We patch them into the ConfigMap here at
+# deploy time so the ArgoCD PostSync Job can apply the full connector
+# (including the base wildcard mapping) in a single tctl create -f pass.
+
+- name: Render SAML connector into teleport-rbac-files ConfigMap
+  ansible.builtin.shell:
+    cmd: |
+      kubectl patch configmap teleport-rbac-files -n teleport --type=merge -p "$(cat <<EOF
+      {
+        "data": {
+          "saml-okta.yaml": "kind: saml\nversion: v2\nmetadata:\n  name: okta\nspec:\n  display: \"Okta\"\n  acs: \"https://grant-tam-teleport.gvteleport.com/v1/webapi/saml/acs/okta\"\n  entity_descriptor_url: \"{{ okta_metadata_url }}\"\n  attributes_to_roles:\n    - name: \"groups\"\n      value: \"*\"\n      roles:\n        - base\n    - name: \"groups\"\n      value: \"{{ okta_groups_editor }}\"\n      roles:\n        - editor\n        - access\n    - name: \"groups\"\n      value: \"{{ okta_groups_access }}\"\n      roles:\n        - access\n"
+        }
+      }
+      EOF
+      )"
+    executable: /bin/bash
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  changed_when: true
+
 - name: Wait for teleport-rbac Application to sync
   ansible.builtin.command:
     cmd: >
