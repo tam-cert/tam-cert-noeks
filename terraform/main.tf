@@ -545,7 +545,16 @@ locals {
     EOF
 
     # ── Enable and start Teleport ────────────────────────────────────────────
-    # Proxy uses a Let's Encrypt cert via ACME — no --insecure flag needed.
+    # --insecure is required while the proxy uses a Let's Encrypt staging cert
+    # (staging certs are not trusted by the OS CA store). Remove this drop-in
+    # once acmeURI is switched to production in teleport-values.yaml.j2.
+    mkdir -p /etc/systemd/system/teleport.service.d
+    cat <<DROPIN > /etc/systemd/system/teleport.service.d/insecure.conf
+[Service]
+ExecStart=
+ExecStart=/usr/local/bin/teleport start --config /etc/teleport.yaml --pid-file=/run/teleport.pid --insecure
+DROPIN
+    systemctl daemon-reload
     systemctl enable teleport
     systemctl start teleport
 
