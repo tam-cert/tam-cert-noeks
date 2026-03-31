@@ -345,7 +345,7 @@ locals {
     mkdir -p "$ANSIBLE_DIR/roles/teleport-node/templates"
     mkdir -p "$ANSIBLE_DIR/roles/argocd/tasks"
     mkdir -p "$ANSIBLE_DIR/roles/argocd/templates"
-    mkdir -p "$ANSIBLE_DIR/argocd/apps/teleport-rbac"
+    mkdir -p "$ANSIBLE_DIR/argocd/apps/teleport-rbac/resources"
     mkdir -p "$ANSIBLE_DIR/roles/postgres/tasks"
     mkdir -p "$ANSIBLE_DIR/roles/postgres/files"
     mkdir -p "$ANSIBLE_DIR/roles/access-graph/tasks"
@@ -390,13 +390,13 @@ locals {
       "apps/teleport-rbac/rbac-syncer-rbac.yaml" \
       "apps/teleport-rbac/rbac-configmap.yaml" \
       "apps/teleport-rbac/rbac-sync-job.yaml" \
-      "apps/teleport-rbac/login-rule-okta-team.yaml" \
-      "apps/teleport-rbac/role-base.yaml" \
-      "apps/teleport-rbac/role-kube-access.yaml" \
-      "apps/teleport-rbac/role-ssh-access.yaml" \
-      "apps/teleport-rbac/role-ssh-root-access.yaml" \
-      "apps/teleport-rbac/role-auto-approver.yaml" \
-      "apps/teleport-rbac/cluster-auth-preference.yaml"; do
+      "apps/teleport-rbac/resources/login-rule-okta-team.yaml" \
+      "apps/teleport-rbac/resources/role-base.yaml" \
+      "apps/teleport-rbac/resources/role-kube-access.yaml" \
+      "apps/teleport-rbac/resources/role-ssh-access.yaml" \
+      "apps/teleport-rbac/resources/role-ssh-root-access.yaml" \
+      "apps/teleport-rbac/resources/role-auto-approver.yaml" \
+      "apps/teleport-rbac/resources/cluster-auth-preference.yaml"; do
       echo "Fetching argocd/$argocd_file..."
       rm -f "$ARGOCD_DIR/$argocd_file"
       curl -fsSL "$REPO/argocd/$argocd_file" -o "$ARGOCD_DIR/$argocd_file" || { echo "ERROR: failed to fetch argocd/$argocd_file"; exit 1; }
@@ -544,36 +544,38 @@ locals {
     # join_method: iam  — uses sts:GetCallerIdentity, no static token
     # token:            — must match the join token name created by Ansible
     # labels:           — 'team' must match Okta group for RBAC scoping
-    cat <<EOF > /etc/teleport.yaml
-    version: v3
-    teleport:
-      nodename: ssh-node-1
-      data_dir: /var/lib/teleport
-      log:
-        output: stderr
-        severity: INFO
-      join_params:
-        method: iam
-        token_name: ssh-node-iam-token
-      proxy_server: grant-tam-teleport.gvteleport.com:443
-
-    auth_service:
-      enabled: false
-
-    proxy_service:
-      enabled: false
-
-    ssh_service:
-      enabled: true
-      labels:
-        team: platform
-        env: demo
-        node: ssh-node-1
-      commands:
-        - name: hostname
-          command: [hostname]
-          period: 1m0s
-    EOF
+    # Note: written via printf to avoid heredoc indentation issues inside
+    # Terraform's <<-EOT block (<<-EOT strips tabs only, not spaces).
+    printf '%s\n' \
+      'version: v3' \
+      'teleport:' \
+      '  nodename: ssh-node-1' \
+      '  data_dir: /var/lib/teleport' \
+      '  log:' \
+      '    output: stderr' \
+      '    severity: INFO' \
+      '  join_params:' \
+      '    method: iam' \
+      '    token_name: ssh-node-iam-token' \
+      '  proxy_server: grant-tam-teleport.gvteleport.com:443' \
+      '' \
+      'auth_service:' \
+      '  enabled: false' \
+      '' \
+      'proxy_service:' \
+      '  enabled: false' \
+      '' \
+      'ssh_service:' \
+      '  enabled: true' \
+      '  labels:' \
+      '    team: platform' \
+      '    env: demo' \
+      '    node: ssh-node-1' \
+      '  commands:' \
+      '    - name: hostname' \
+      '      command: [hostname]' \
+      '      period: 1m0s' \
+      > /etc/teleport.yaml
 
     # ── Enable and start Teleport ────────────────────────────────────────────
     # --insecure is required while the proxy uses a Let's Encrypt staging cert

@@ -292,6 +292,20 @@
     KUBECONFIG: /home/ubuntu/.kube/config
   changed_when: true
 
+# ── Load Okta vars from env file for SAML connector patch ─────────────────────
+- name: Source teleport-env to get Okta variables
+  ansible.builtin.shell:
+    cmd: source /home/ubuntu/.teleport-env && env
+    executable: /bin/bash
+  register: teleport_env_vars
+  changed_when: false
+
+- name: Set Okta facts from env file
+  ansible.builtin.set_fact:
+    okta_metadata_url:   "{{ teleport_env_vars.stdout | regex_search('OKTA_METADATA_URL=(.+)', '\\1') | first }}"
+    okta_groups_editor:  "{{ teleport_env_vars.stdout | regex_search('OKTA_GROUPS_EDITOR=(.+)', '\\1') | first }}"
+    okta_groups_access:  "{{ teleport_env_vars.stdout | regex_search('OKTA_GROUPS_ACCESS=(.+)', '\\1') | first }}"
+
 # ── Patch teleport-rbac-files ConfigMap with rendered SAML connector ──────────
 # The SAML connector contains Okta secrets (metadata URL, group names) that
 # can't be committed to the repo. We patch them into the ConfigMap here at

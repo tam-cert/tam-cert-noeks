@@ -1,0 +1,27 @@
+kind: role
+version: v7
+metadata:
+  name: base
+  description: "Base role: no standing privileges, request-only access"
+spec:
+  allow:
+    request:
+      roles:
+        - kube-access
+        - ssh-access
+        - ssh-root-access
+      thresholds:
+        - name: ssh-access auto-approval
+          filter: 'contains(request.roles, "ssh-access") && !contains(request.roles, "ssh-root-access") && !contains(request.roles, "kube-access")'
+          approve: 1
+          deny: 1
+        - name: manual approval
+          filter: 'contains(request.roles, "ssh-root-access") || contains(request.roles, "kube-access")'
+          approve: 1
+          deny: 1
+      annotations:
+        reason: '[{"required":true}]'
+  deny: {}
+  options:
+    max_session_ttl: 8h
+    lock: best_effort

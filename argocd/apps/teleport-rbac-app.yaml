@@ -16,6 +16,8 @@ spec:
     repoURL: https://github.com/grantvoss-teleport/tam-cert-noeks.git
     targetRevision: main
     path: argocd/apps/teleport-rbac
+    directory:
+      exclude: 'resources/*'
   destination:
     server: https://kubernetes.default.svc
     namespace: teleport
