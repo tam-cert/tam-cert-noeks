@@ -1,0 +1,17 @@
+kind: role
+version: v7
+metadata:
+  name: auto-approver
+  description: "Machine ID role: approves pure ssh-access requests only"
+spec:
+  allow:
+    review_requests:
+      roles:
+        - ssh-access
+      where: >
+        contains(request.roles, "ssh-access") &&
+        !contains(request.roles, "ssh-root-access") &&
+        !contains(request.roles, "kube-access")
+  deny: {}
+  options:
+    max_session_ttl: 1h

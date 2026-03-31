@@ -1,0 +1,89 @@
+# PostSync Job: applies all Teleport RBAC resources via tctl create.
+# Runs after ArgoCD syncs the ConfigMap containing the rendered RBAC YAMLs.
+# Uses kubectl exec into the teleport-auth pod (distroless — no shell, tctl only).
+#
+# Lifecycle:
+#   PreSync  → ServiceAccount + RBAC created (rbac-syncer-rbac.yaml)
+#   Sync     → ConfigMap with RBAC files created (rbac-configmap.yaml)
+#   PostSync → This Job mounts the ConfigMap, execs tctl create -f for each file
+#   Cleanup  → Job deleted by ArgoCD after TTL (hook-delete-policy)
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: teleport-rbac-apply
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/hook: PostSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+spec:
+  ttlSecondsAfterFinished: 300
+  template:
+    spec:
+      serviceAccountName: teleport-rbac-syncer
+      restartPolicy: OnFailure
+      containers:
+        - name: tctl-apply
+          image: bitnami/kubectl:latest
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              echo "=== Finding Teleport auth pod ==="
+              AUTH_POD=$(kubectl get pod -n teleport \
+                -l app.kubernetes.io/component=auth \
+                -o jsonpath='{.items[0].metadata.name}')
+              echo "Auth pod: ${AUTH_POD}"
+
+              echo "=== Patching auth deployment to mount RBAC ConfigMap ==="
+              kubectl patch deployment teleport-auth -n teleport --type=json -p="[
+                {\"op\":\"add\",\"path\":\"/spec/template/spec/volumes/-\",
+                 \"value\":{\"name\":\"rbac-sync\",\"configMap\":{\"name\":\"teleport-rbac-files\"}}},
+                {\"op\":\"add\",\"path\":\"/spec/template/spec/containers/0/volumeMounts/-\",
+                 \"value\":{\"name\":\"rbac-sync\",\"mountPath\":\"/tmp/rbac-sync\",\"readOnly\":true}}
+              ]"
+
+              echo "=== Waiting for auth rollout ==="
+              kubectl rollout status deployment/teleport-auth -n teleport --timeout=120s
+
+              AUTH_POD=$(kubectl get pod -n teleport \
+                -l app.kubernetes.io/component=auth \
+                -o jsonpath='{.items[0].metadata.name}')
+              echo "New auth pod: ${AUTH_POD}"
+
+              echo "=== Applying RBAC resources via tctl ==="
+              for f in \
+                login-rule-okta-team.yaml \
+                role-base.yaml \
+                role-kube-access.yaml \
+                role-ssh-access.yaml \
+                role-ssh-root-access.yaml \
+                role-auto-approver.yaml \
+                cluster-auth-preference.yaml; do
+                echo "--- Applying ${f} ---"
+                kubectl exec -n teleport "${AUTH_POD}" -- \
+                  tctl create -f "/tmp/rbac-sync/${f}" && echo "${f}: OK" || echo "${f}: WARN (may already exist)"
+              done
+
+              echo "=== Cleaning up volume mount ==="
+              MOUNT_IDX=$(kubectl get deployment teleport-auth -n teleport -o json | \
+                python3 -c "
+              import json,sys
+              d=json.load(sys.stdin)
+              mounts=d['spec']['template']['spec']['containers'][0].get('volumeMounts',[])
+              [print(i) for i,m in enumerate(mounts) if m['name']=='rbac-sync']
+              ")
+              VOL_IDX=$(kubectl get deployment teleport-auth -n teleport -o json | \
+                python3 -c "
+              import json,sys
+              d=json.load(sys.stdin)
+              vols=d['spec']['template']['spec'].get('volumes',[])
+              [print(i) for i,v in enumerate(vols) if v['name']=='rbac-sync']
+              ")
+              kubectl patch deployment teleport-auth -n teleport --type=json -p="[
+                {\"op\":\"remove\",\"path\":\"/spec/template/spec/containers/0/volumeMounts/${MOUNT_IDX}\"},
+                {\"op\":\"remove\",\"path\":\"/spec/template/spec/volumes/${VOL_IDX}\"}
+              ]"
+              kubectl rollout status deployment/teleport-auth -n teleport --timeout=120s
+              echo "=== RBAC sync complete ==="

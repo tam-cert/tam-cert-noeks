@@ -9,3 +9,4 @@
 - import_playbook: teleport-sso.yaml    # 8 - Okta SAML connector (bootstrap only)
 - import_playbook: teleport-rbac.yaml   # 9 - Machine ID bot + rbac-manager role + join token
 - import_playbook: teleport-node.yaml   # 10 - AWS IAM join token for ssh-node-1
+- import_playbook: argocd.yaml          # 11 - ArgoCD + Teleport app + RBAC sync Application

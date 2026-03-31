@@ -343,6 +343,9 @@ locals {
     mkdir -p "$ANSIBLE_DIR/roles/teleport-rbac/templates"
     mkdir -p "$ANSIBLE_DIR/roles/teleport-node/tasks"
     mkdir -p "$ANSIBLE_DIR/roles/teleport-node/templates"
+    mkdir -p "$ANSIBLE_DIR/roles/argocd/tasks"
+    mkdir -p "$ANSIBLE_DIR/roles/argocd/templates"
+    mkdir -p "$ANSIBLE_DIR/argocd/apps/teleport-rbac"
     mkdir -p "$ANSIBLE_DIR/roles/postgres/tasks"
     mkdir -p "$ANSIBLE_DIR/roles/postgres/files"
     mkdir -p "$ANSIBLE_DIR/roles/access-graph/tasks"
@@ -353,7 +356,7 @@ locals {
       sleep 5
     done
 
-    for f in ansible.cfg hosts site.yaml k8s-setup.yaml k8s-master.yaml k8s-workers.yaml postgres.yaml teleport.yaml access-graph.yaml teleport-oidc.yaml teleport-sso.yaml teleport-rbac.yaml teleport-node.yaml; do
+    for f in ansible.cfg hosts site.yaml k8s-setup.yaml k8s-master.yaml k8s-workers.yaml postgres.yaml teleport.yaml access-graph.yaml teleport-oidc.yaml teleport-sso.yaml teleport-rbac.yaml teleport-node.yaml argocd.yaml; do
       echo "Fetching ansible/$f..."
       rm -f "$ANSIBLE_DIR/$f"
       curl -fsSL "$REPO/ansible/$f" -o "$ANSIBLE_DIR/$f" || { echo "ERROR: failed to fetch $f"; exit 1; }
@@ -373,6 +376,33 @@ locals {
       "roles/teleport-rbac/templates/role-rbac-manager.yaml.j2" \
       "roles/teleport-node/tasks/main.yaml" \
       "roles/teleport-node/templates/ssh-node-iam-token.yaml.j2" \
+      "roles/argocd/tasks/main.yaml" \
+      "roles/argocd/templates/teleport-app-argocd.yaml.j2"; do
+      echo "Fetching ansible/$role_file..."
+      rm -f "$ANSIBLE_DIR/$role_file"
+      curl -fsSL "$REPO/ansible/$role_file" -o "$ANSIBLE_DIR/$role_file" || { echo "ERROR: failed to fetch $role_file"; exit 1; }
+    done
+
+    # ── Fetch argocd app manifests (repo root, not under ansible/) ───────────
+    ARGOCD_DIR="/home/ubuntu/ansible/argocd"
+    for argocd_file in \
+      "apps/teleport-rbac-app.yaml" \
+      "apps/teleport-rbac/rbac-syncer-rbac.yaml" \
+      "apps/teleport-rbac/rbac-configmap.yaml" \
+      "apps/teleport-rbac/rbac-sync-job.yaml" \
+      "apps/teleport-rbac/login-rule-okta-team.yaml" \
+      "apps/teleport-rbac/role-base.yaml" \
+      "apps/teleport-rbac/role-kube-access.yaml" \
+      "apps/teleport-rbac/role-ssh-access.yaml" \
+      "apps/teleport-rbac/role-ssh-root-access.yaml" \
+      "apps/teleport-rbac/role-auto-approver.yaml" \
+      "apps/teleport-rbac/cluster-auth-preference.yaml"; do
+      echo "Fetching argocd/$argocd_file..."
+      rm -f "$ARGOCD_DIR/$argocd_file"
+      curl -fsSL "$REPO/argocd/$argocd_file" -o "$ARGOCD_DIR/$argocd_file" || { echo "ERROR: failed to fetch argocd/$argocd_file"; exit 1; }
+    done
+
+    for role_file in \
       "roles/postgres/tasks/main.yaml" \
       "roles/postgres/files/namespace.yaml" \
       "roles/postgres/files/postgres-config.yaml" \
@@ -406,6 +436,7 @@ locals {
     sudo -E -u ubuntu ansible-playbook "$ANSIBLE_DIR/teleport-sso.yaml"  -i "$ANSIBLE_DIR/hosts" --become
     sudo -E -u ubuntu ansible-playbook "$ANSIBLE_DIR/teleport-rbac.yaml" -i "$ANSIBLE_DIR/hosts" --become
     sudo -E -u ubuntu ansible-playbook "$ANSIBLE_DIR/teleport-node.yaml" -i "$ANSIBLE_DIR/hosts" --become
+    sudo -E -u ubuntu ansible-playbook "$ANSIBLE_DIR/argocd.yaml"        -i "$ANSIBLE_DIR/hosts" --become
   EOT
 
   worker_userdata = <<-EOT

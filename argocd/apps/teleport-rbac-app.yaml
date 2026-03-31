@@ -1,0 +1,27 @@
+# ArgoCD Application: teleport-rbac
+# Watches argocd/apps/teleport-rbac/ in the repo.
+# On every sync, applies the ConfigMap (Sync) then runs the PostSync Job
+# which execs tctl create -f for each RBAC resource into the auth pod.
+# This means any change to RBAC YAMLs in the repo auto-applies to the cluster.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: teleport-rbac
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/grantvoss-teleport/tam-cert-noeks.git
+    targetRevision: main
+    path: argocd/apps/teleport-rbac
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: teleport
+  syncPolicy:
+    automated:
+      prune: false
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=false

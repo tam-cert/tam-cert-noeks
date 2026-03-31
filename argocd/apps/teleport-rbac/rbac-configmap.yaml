@@ -1,0 +1,164 @@
+# ConfigMap containing all Teleport RBAC resource YAMLs.
+# Mounted into the teleport-auth pod by the PostSync Job so tctl can apply them.
+# ArgoCD keeps this in sync with the repo — any change to argocd/apps/teleport-rbac/*.yaml
+# will trigger a sync, which reruns the PostSync Job and updates the live cluster.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: teleport-rbac-files
+  namespace: teleport
+data:
+  login-rule-okta-team.yaml: |
+    kind: login_rule
+    version: v1
+    metadata:
+      name: okta-team-trait
+      description: "Maps Okta groups attribute to internal.team trait for namespace/node scoping"
+    spec:
+      priority: 0
+      traits_map:
+        logins:
+          - external.logins
+        team:
+          - external.groups
+
+  role-base.yaml: |
+    kind: role
+    version: v7
+    metadata:
+      name: base
+      description: "Base role: no standing privileges, request-only access"
+    spec:
+      allow:
+        request:
+          roles:
+            - kube-access
+            - ssh-access
+            - ssh-root-access
+          thresholds:
+            - name: ssh-access auto-approval
+              filter: 'contains(request.roles, "ssh-access") && !contains(request.roles, "ssh-root-access") && !contains(request.roles, "kube-access")'
+              approve: 1
+              deny: 1
+            - name: manual approval
+              filter: 'contains(request.roles, "ssh-root-access") || contains(request.roles, "kube-access")'
+              approve: 1
+              deny: 1
+          annotations:
+            reason: '[{"required":true}]'
+      deny: {}
+      options:
+        max_session_ttl: 8h
+        lock: best_effort
+
+  role-kube-access.yaml: |
+    kind: role
+    version: v7
+    metadata:
+      name: kube-access
+      description: "Kubernetes access scoped to team namespace derived from SSO trait"
+    spec:
+      allow:
+        kubernetes_groups:
+          - "{{internal.team}}"
+        kubernetes_labels:
+          "*": "*"
+        kubernetes_resources:
+          - kind: "*"
+            namespace: "{{internal.team}}"
+            name: "*"
+            verbs: ["*"]
+      deny: {}
+      options:
+        max_session_ttl: 8h
+        request_access: optional
+        lock: best_effort
+
+  role-ssh-access.yaml: |
+    kind: role
+    version: v7
+    metadata:
+      name: ssh-access
+      description: "SSH access to team-labeled nodes, no root elevation"
+    spec:
+      allow:
+        logins:
+          - ubuntu
+        node_labels:
+          team: "{{internal.team}}"
+        host_groups: []
+        host_sudoers: []
+      deny:
+        logins:
+          - root
+        host_sudoers:
+          - "*"
+      options:
+        max_session_ttl: 8h
+        forward_agent: false
+        port_forwarding: false
+        enhanced_recording:
+          - command
+          - network
+        permit_x11_forwarding: false
+        lock: best_effort
+        request_access: optional
+
+  role-ssh-root-access.yaml: |
+    kind: role
+    version: v7
+    metadata:
+      name: ssh-root-access
+      description: "SSH access to team-labeled nodes with sudo/root elevation"
+    spec:
+      allow:
+        logins:
+          - ubuntu
+          - root
+        node_labels:
+          team: "{{internal.team}}"
+        host_sudoers:
+          - "ubuntu ALL=(ALL) NOPASSWD: ALL"
+      deny: {}
+      options:
+        max_session_ttl: 4h
+        forward_agent: false
+        port_forwarding: false
+        enhanced_recording:
+          - command
+          - network
+        permit_x11_forwarding: false
+        lock: best_effort
+        request_access: optional
+
+  role-auto-approver.yaml: |
+    kind: role
+    version: v7
+    metadata:
+      name: auto-approver
+      description: "Machine ID role: approves pure ssh-access requests only"
+    spec:
+      allow:
+        review_requests:
+          roles:
+            - ssh-access
+          where: >
+            contains(request.roles, "ssh-access") &&
+            !contains(request.roles, "ssh-root-access") &&
+            !contains(request.roles, "kube-access")
+      deny: {}
+      options:
+        max_session_ttl: 1h
+
+  cluster-auth-preference.yaml: |
+    kind: cluster_auth_preference
+    version: v2
+    metadata:
+      name: cluster-auth-preference
+    spec:
+      type: saml
+      connector_name: okta
+      local_auth: true
+      second_factor: "on"
+      webauthn:
+        rp_id: "grant-tam-teleport.gvteleport.com"

@@ -1,0 +1,21 @@
+kind: role
+version: v7
+metadata:
+  name: kube-access
+  description: "Kubernetes access scoped to team namespace derived from SSO trait"
+spec:
+  allow:
+    kubernetes_groups:
+      - "{{internal.team}}"
+    kubernetes_labels:
+      "*": "*"
+    kubernetes_resources:
+      - kind: "*"
+        namespace: "{{internal.team}}"
+        name: "*"
+        verbs: ["*"]
+  deny: {}
+  options:
+    max_session_ttl: 8h
+    request_access: optional
+    lock: best_effort
