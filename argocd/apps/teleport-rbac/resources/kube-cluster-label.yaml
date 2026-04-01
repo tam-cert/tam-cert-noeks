@@ -1,0 +1,6 @@
+kind: kube_cluster
+version: v3
+metadata:
+  name: grant-tam-teleport.gvteleport.com
+  labels:
+    env: platform
