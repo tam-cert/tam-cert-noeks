@@ -61,6 +61,7 @@ spec:
                 role-ssh-root-access.yaml \
                 role-auto-approver.yaml \
                 cluster-auth-preference.yaml \
+                kube-cluster-label.yaml \
                 saml-okta.yaml; do
                 echo "--- Applying ${f} ---"
                 kubectl exec -n teleport "${AUTH_POD}" -- \
