@@ -9,7 +9,9 @@ spec:
   attributes_to_roles:
     # Wildcard: every Okta user gets base regardless of group.
     # Ensures all authenticated users start with zero standing privilege.
-    - { name: "groups", value: "*",                      roles: ["base"] }
-    # Team-specific mappings preserve existing editor/access grants.
+    - { name: "groups", value: "*",                        roles: ["base"] }
+    # Editor group: full editor + access standing privileges (unchanged).
     - { name: "groups", value: "{{ okta_groups_editor }}", roles: ["editor", "access"] }
-    - { name: "groups", value: "{{ okta_groups_access }}",  roles: ["access"] }
+    # Access group: mapped to okta_base only — no standing privileges.
+    # Users must submit an Access Request for okta_ssh, okta_kube, or okta_ssh_root.
+    - { name: "groups", value: "{{ okta_groups_access }}", roles: ["okta_base"] }

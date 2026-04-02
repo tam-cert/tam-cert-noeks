@@ -60,6 +60,10 @@ spec:
                 role-ssh-access.yaml \
                 role-ssh-root-access.yaml \
                 role-auto-approver.yaml \
+                role-okta-base.yaml \
+                role-okta-kube.yaml \
+                role-okta-ssh.yaml \
+                role-okta-ssh-root.yaml \
                 cluster-auth-preference.yaml \
                 kube-cluster-label.yaml \
                 saml-okta.yaml; do

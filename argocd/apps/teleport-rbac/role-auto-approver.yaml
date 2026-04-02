@@ -2,16 +2,20 @@ kind: role
 version: v7
 metadata:
   name: auto-approver
-  description: "Machine ID role: approves pure ssh-access requests only"
+  description: "Machine ID role: approves pure ssh-access and okta_ssh requests only"
 spec:
   allow:
     review_requests:
       roles:
         - ssh-access
+        - okta_ssh
       where: >
-        contains(request.roles, "ssh-access") &&
+        (contains(request.roles, "ssh-access") &&
         !contains(request.roles, "ssh-root-access") &&
-        !contains(request.roles, "kube-access")
+        !contains(request.roles, "kube-access")) ||
+        (contains(request.roles, "okta_ssh") &&
+        !contains(request.roles, "okta_ssh_root") &&
+        !contains(request.roles, "okta_kube"))
   deny: {}
   options:
     max_session_ttl: 1h

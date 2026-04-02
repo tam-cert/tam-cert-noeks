@@ -139,19 +139,132 @@ data:
     version: v7
     metadata:
       name: auto-approver
-      description: "Machine ID role: approves pure ssh-access requests only"
+      description: "Machine ID role: approves pure ssh-access and okta_ssh requests only"
     spec:
       allow:
         review_requests:
           roles:
             - ssh-access
+            - okta_ssh
           where: >
-            contains(request.roles, "ssh-access") &&
+            (contains(request.roles, "ssh-access") &&
             !contains(request.roles, "ssh-root-access") &&
-            !contains(request.roles, "kube-access")
+            !contains(request.roles, "kube-access")) ||
+            (contains(request.roles, "okta_ssh") &&
+            !contains(request.roles, "okta_ssh_root") &&
+            !contains(request.roles, "okta_kube"))
       deny: {}
       options:
         max_session_ttl: 1h
+
+  role-okta-base.yaml: |
+    kind: role
+    version: v7
+    metadata:
+      name: okta_base
+      description: "Okta SSO base: no standing privileges, can request okta_* roles"
+    spec:
+      allow:
+        request:
+          roles:
+            - okta_kube
+            - okta_ssh
+            - okta_ssh_root
+          thresholds:
+            - name: okta_ssh auto-approval
+              filter: 'contains(request.roles, "okta_ssh") && !contains(request.roles, "okta_ssh_root") && !contains(request.roles, "okta_kube")'
+              approve: 1
+              deny: 1
+            - name: manual approval
+              filter: 'contains(request.roles, "okta_ssh_root") || contains(request.roles, "okta_kube")'
+              approve: 1
+              deny: 1
+          annotations:
+            reason: '[{"required":true}]'
+      deny: {}
+      options:
+        max_session_ttl: 8h
+        lock: best_effort
+
+  role-okta-kube.yaml: |
+    kind: role
+    version: v7
+    metadata:
+      name: okta_kube
+      description: "Kubernetes access scoped to team namespace derived from SSO trait"
+    spec:
+      allow:
+        kubernetes_groups:
+          - "{{internal.team}}"
+        kubernetes_labels:
+          "*": "*"
+        kubernetes_resources:
+          - kind: "*"
+            namespace: "{{internal.team}}"
+            name: "*"
+            verbs: ["*"]
+      deny: {}
+      options:
+        max_session_ttl: 8h
+        request_access: optional
+        lock: best_effort
+
+  role-okta-ssh.yaml: |
+    kind: role
+    version: v7
+    metadata:
+      name: okta_ssh
+      description: "SSH access to team-labeled nodes, no root elevation"
+    spec:
+      allow:
+        logins:
+          - ubuntu
+        node_labels:
+          team: "{{internal.team}}"
+        host_groups: []
+        host_sudoers: []
+      deny:
+        logins:
+          - root
+        host_sudoers:
+          - "*"
+      options:
+        max_session_ttl: 8h
+        forward_agent: false
+        port_forwarding: false
+        enhanced_recording:
+          - command
+          - network
+        permit_x11_forwarding: false
+        lock: best_effort
+        request_access: optional
+
+  role-okta-ssh-root.yaml: |
+    kind: role
+    version: v7
+    metadata:
+      name: okta_ssh_root
+      description: "SSH access to team-labeled nodes with sudo/root elevation"
+    spec:
+      allow:
+        logins:
+          - ubuntu
+          - root
+        node_labels:
+          team: "{{internal.team}}"
+        host_sudoers:
+          - "ubuntu ALL=(ALL) NOPASSWD: ALL"
+      deny: {}
+      options:
+        max_session_ttl: 4h
+        forward_agent: false
+        port_forwarding: false
+        enhanced_recording:
+          - command
+          - network
+        permit_x11_forwarding: false
+        lock: best_effort
+        request_access: optional
 
   cluster-auth-preference.yaml: |
     kind: cluster_auth_preference

@@ -1,0 +1,27 @@
+kind: role
+version: v7
+metadata:
+  name: okta_base
+  description: "Okta SSO base: no standing privileges, can request okta_* roles"
+spec:
+  allow:
+    request:
+      roles:
+        - okta_kube
+        - okta_ssh
+        - okta_ssh_root
+      thresholds:
+        - name: okta_ssh auto-approval
+          filter: 'contains(request.roles, "okta_ssh") && !contains(request.roles, "okta_ssh_root") && !contains(request.roles, "okta_kube")'
+          approve: 1
+          deny: 1
+        - name: manual approval
+          filter: 'contains(request.roles, "okta_ssh_root") || contains(request.roles, "okta_kube")'
+          approve: 1
+          deny: 1
+      annotations:
+        reason: '[{"required":true}]'
+  deny: {}
+  options:
+    max_session_ttl: 8h
+    lock: best_effort
