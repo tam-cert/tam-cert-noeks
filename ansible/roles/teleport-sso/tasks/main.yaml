@@ -24,8 +24,8 @@
 # ─── Create initial Okta SAML connector ──────────────────────────────────────
 # Creates a bootstrap connector with editor + access mappings using only
 # built-in Teleport roles (no custom roles exist yet at this step).
-# ArgoCD (step 11) overwrites this with the full connector including the
-# base wildcard mapping once the base role has been created.
+# The argocd role (step 11) updates this connector after ArgoCD has applied
+# all custom roles, adding the base wildcard and okta_base mappings.
 
 - name: Create initial Okta SAML connector
   ansible.builtin.shell:
@@ -62,9 +62,10 @@
   ansible.builtin.debug:
     msg: "{{ saml_verify.stdout_lines }}"
 
-- name: Remind operator that auth preference and base role are set by Machine ID workflow
+- name: Remind operator that full SAML mapping is applied by argocd role
   ansible.builtin.debug:
     msg: >
-      Initial Okta SAML connector created. cluster_auth_preference and the
-      base role wildcard mapping are applied by the GitHub Actions
-      teleport-rbac workflow using Machine ID. Run that workflow next.
+      Bootstrap Okta SAML connector created (built-in roles only).
+      The argocd role (step 11) will update this connector with the full
+      attributes_to_roles mapping including base and okta_base after
+      ArgoCD has applied all custom roles.

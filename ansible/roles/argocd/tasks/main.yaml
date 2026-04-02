@@ -280,69 +280,21 @@
     path: /tmp/teleport-app-argocd.yaml
     state: absent
 
-# ── Pre-create teleport-rbac-files ConfigMap with SAML connector ──────────────
-# The SAML connector contains Okta secrets that can't be committed to the repo.
-# We create the full ConfigMap (including the SAML entry) BEFORE applying the
-# ArgoCD Application so that when ArgoCD first syncs, the ConfigMap already
-# exists with the correct content and the PostSync Job can apply everything.
-# ArgoCD will adopt and manage the ConfigMap going forward.
+# ── Pre-create teleport-rbac-files ConfigMap (roles only, no SAML) ────────────
+# The SAML connector references custom roles (base, okta_base) that don't exist
+# until ArgoCD's PostSync Job runs. To avoid a chicken-and-egg rejection from
+# tctl, the SAML connector is NOT included here. It is applied separately AFTER
+# ArgoCD has successfully synced all roles (see post-ArgoCD SAML update below).
 
-- name: Source teleport-env to get Okta variables
-  ansible.builtin.shell:
-    cmd: source /home/ubuntu/.teleport-env && env
-    executable: /bin/bash
-  register: teleport_env_vars
-  changed_when: false
-
-- name: Set Okta facts from env file
-  ansible.builtin.set_fact:
-    okta_metadata_url:  "{{ teleport_env_vars.stdout | regex_search('OKTA_METADATA_URL=(.+)', '\\1') | first }}"
-    okta_groups_editor: "{{ teleport_env_vars.stdout | regex_search('OKTA_GROUPS_EDITOR=(.+)', '\\1') | first }}"
-    okta_groups_access: "{{ teleport_env_vars.stdout | regex_search('OKTA_GROUPS_ACCESS=(.+)', '\\1') | first }}"
-
-- name: Write saml-okta.yaml to temp file
-  ansible.builtin.copy:
-    dest: /tmp/saml-okta.yaml
-    mode: "0600"
-    content: |
-      kind: saml
-      version: v2
-      metadata:
-        name: okta
-      spec:
-        display: "Okta"
-        acs: "https://grant-tam-teleport.gvteleport.com/v1/webapi/saml/acs/okta"
-        entity_descriptor_url: "{{ okta_metadata_url }}"
-        attributes_to_roles:
-          - name: "groups"
-            value: "*"
-            roles:
-              - base
-          - name: "groups"
-            value: "{{ okta_groups_editor }}"
-            roles:
-              - editor
-              - access
-          - name: "groups"
-            value: "{{ okta_groups_access }}"
-            roles:
-              - okta_base
-
-- name: Add saml-okta.yaml to teleport-rbac-files ConfigMap
+- name: Create empty teleport-rbac-files ConfigMap placeholder
   ansible.builtin.shell:
     cmd: |
       kubectl create configmap teleport-rbac-files -n teleport \
-        --from-file=saml-okta.yaml=/tmp/saml-okta.yaml \
         --dry-run=client -o yaml | kubectl apply -f -
     executable: /bin/bash
   environment:
     KUBECONFIG: /home/ubuntu/.kube/config
   changed_when: true
-
-- name: Remove temp saml file
-  ansible.builtin.file:
-    path: /tmp/saml-okta.yaml
-    state: absent
 
 # ── Deploy teleport-rbac ArgoCD Application ───────────────────────────────────
 # Applied AFTER the ConfigMap exists so ArgoCD can adopt it on first sync
@@ -403,6 +355,101 @@
 - name: Print teleport-rbac sync status
   ansible.builtin.debug:
     msg: "{{ rbac_sync.stdout | default('Sync status check complete') }}"
+
+# ── Update SAML connector with full role mappings ─────────────────────────────
+# Now that ArgoCD has applied all custom roles (base, okta_base, etc.), we can
+# safely update the SAML connector to include the full attributes_to_roles
+# mapping. This replaces the bootstrap connector created in teleport-sso step 8.
+
+- name: Source teleport-env to get Okta variables
+  ansible.builtin.shell:
+    cmd: source /home/ubuntu/.teleport-env && env
+    executable: /bin/bash
+  register: teleport_env_vars
+  changed_when: false
+
+- name: Set Okta facts from env file
+  ansible.builtin.set_fact:
+    okta_metadata_url:  "{{ teleport_env_vars.stdout | regex_search('OKTA_METADATA_URL=(.+)', '\\1') | first }}"
+    okta_groups_editor: "{{ teleport_env_vars.stdout | regex_search('OKTA_GROUPS_EDITOR=(.+)', '\\1') | first }}"
+    okta_groups_access: "{{ teleport_env_vars.stdout | regex_search('OKTA_GROUPS_ACCESS=(.+)', '\\1') | first }}"
+
+- name: Get auth pod name for SAML update
+  ansible.builtin.command:
+    cmd: >
+      kubectl get pod -n teleport -l app.kubernetes.io/component=auth
+      -o jsonpath='{.items[0].metadata.name}'
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  register: auth_pod_saml
+  changed_when: false
+
+- name: Write full SAML connector to temp file
+  ansible.builtin.copy:
+    dest: /tmp/saml-okta-full.yaml
+    mode: "0600"
+    content: |
+      kind: saml
+      version: v2
+      metadata:
+        name: okta
+      spec:
+        display: "Okta"
+        acs: "https://grant-tam-teleport.gvteleport.com/v1/webapi/saml/acs/okta"
+        entity_descriptor_url: "{{ okta_metadata_url }}"
+        attributes_to_roles:
+          - name: "groups"
+            value: "*"
+            roles:
+              - base
+          - name: "groups"
+            value: "{{ okta_groups_editor }}"
+            roles:
+              - editor
+              - access
+          - name: "groups"
+            value: "{{ okta_groups_access }}"
+            roles:
+              - okta_base
+
+- name: Apply full SAML connector via ConfigMap mount
+  ansible.builtin.shell:
+    cmd: |
+      kubectl create configmap saml-full-patch -n teleport \
+        --from-file=saml-okta-full.yaml=/tmp/saml-okta-full.yaml \
+        --dry-run=client -o yaml | kubectl apply -f -
+      kubectl patch deployment teleport-auth -n teleport --type=json -p='[
+        {"op":"add","path":"/spec/template/spec/volumes/-","value":{"name":"saml-full","configMap":{"name":"saml-full-patch"}}},
+        {"op":"add","path":"/spec/template/spec/containers/0/volumeMounts/-","value":{"name":"saml-full","mountPath":"/tmp/saml-full","readOnly":true}}
+      ]'
+      kubectl rollout status deployment/teleport-auth -n teleport --timeout=120s
+      AUTH_POD=$(kubectl get pod -n teleport -l app.kubernetes.io/component=auth -o jsonpath='{.items[0].metadata.name}')
+      kubectl exec -n teleport $AUTH_POD -- tctl create -f /tmp/saml-full/saml-okta-full.yaml
+      MOUNT_IDX=$(kubectl get deployment teleport-auth -n teleport -o json | \
+        python3 -c "import json,sys; d=json.load(sys.stdin); mounts=d['spec']['template']['spec']['containers'][0].get('volumeMounts',[]); [print(i) for i,m in enumerate(mounts) if m['name']=='saml-full']")
+      VOL_IDX=$(kubectl get deployment teleport-auth -n teleport -o json | \
+        python3 -c "import json,sys; d=json.load(sys.stdin); vols=d['spec']['template']['spec'].get('volumes',[]); [print(i) for i,v in enumerate(vols) if v['name']=='saml-full']")
+      kubectl patch deployment teleport-auth -n teleport --type=json \
+        -p="[{\"op\":\"remove\",\"path\":\"/spec/template/spec/containers/0/volumeMounts/${MOUNT_IDX}\"},{\"op\":\"remove\",\"path\":\"/spec/template/spec/volumes/${VOL_IDX}\"}]"
+      kubectl delete configmap saml-full-patch -n teleport
+      rm /tmp/saml-okta-full.yaml
+    executable: /bin/bash
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  changed_when: true
+
+- name: Verify full SAML connector applied
+  ansible.builtin.command:
+    cmd: >
+      kubectl exec -n teleport {{ auth_pod_saml.stdout }} -- tctl get saml/okta
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  register: saml_verify
+  changed_when: false
+
+- name: Print SAML connector
+  ansible.builtin.debug:
+    msg: "{{ saml_verify.stdout_lines }}"
 
 # ── Verify ────────────────────────────────────────────────────────────────────
 

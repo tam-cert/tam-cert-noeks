@@ -113,8 +113,7 @@ spec:
                 role-okta-ssh.yaml \
                 role-okta-ssh-root.yaml \
                 cluster-auth-preference.yaml \
-                kube-cluster-label.yaml \
-                saml-okta.yaml; do
+                kube-cluster-label.yaml; do
                 echo "--- Applying ${f} ---"
                 kubectl exec -n teleport "${AUTH_POD}" -- \
                   tctl create -f "/tmp/rbac-sync/${f}" && echo "${f}: OK" \
