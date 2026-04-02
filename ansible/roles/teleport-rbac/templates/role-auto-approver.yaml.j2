@@ -7,15 +7,11 @@ spec:
   allow:
     review_requests:
       roles:
-        - ssh-access
         - okta_ssh
       where: >
-        (contains(request.roles, "ssh-access") &&
-        !contains(request.roles, "ssh-root-access") &&
-        !contains(request.roles, "kube-access")) ||
-        (contains(request.roles, "okta_ssh") &&
+        contains(request.roles, "okta_ssh") &&
         !contains(request.roles, "okta_ssh_root") &&
-        !contains(request.roles, "okta_kube"))
+        !contains(request.roles, "okta_kube")
   deny: {}
   options:
     max_session_ttl: 1h

@@ -32,16 +32,16 @@ data:
       allow:
         request:
           roles:
-            - kube-access
-            - ssh-access
-            - ssh-root-access
+            - okta_kube
+            - okta_ssh
+            - okta_ssh_root
           thresholds:
-            - name: ssh-access auto-approval
-              filter: 'contains(request.roles, "ssh-access") && !contains(request.roles, "ssh-root-access") && !contains(request.roles, "kube-access")'
+            - name: ssh auto-approval
+              filter: 'contains(request.roles, "okta_ssh") && !contains(request.roles, "okta_ssh_root") && !contains(request.roles, "okta_kube")'
               approve: 1
               deny: 1
             - name: manual approval
-              filter: 'contains(request.roles, "ssh-root-access") || contains(request.roles, "kube-access")'
+              filter: 'contains(request.roles, "okta_ssh_root") || contains(request.roles, "okta_kube")'
               approve: 1
               deny: 1
           annotations:
@@ -51,108 +51,21 @@ data:
         max_session_ttl: 8h
         lock: best_effort
 
-  role-kube-access.yaml: |
-    kind: role
-    version: v7
-    metadata:
-      name: kube-access
-      description: "Kubernetes access scoped to team namespace derived from SSO trait"
-    spec:
-      allow:
-        kubernetes_groups:
-          - "{{internal.team}}"
-        kubernetes_labels:
-          "*": "*"
-        kubernetes_resources:
-          - kind: "*"
-            namespace: "{{internal.team}}"
-            name: "*"
-            verbs: ["*"]
-      deny: {}
-      options:
-        max_session_ttl: 8h
-        request_access: optional
-        lock: best_effort
-
-  role-ssh-access.yaml: |
-    kind: role
-    version: v7
-    metadata:
-      name: ssh-access
-      description: "SSH access to team-labeled nodes, no root elevation"
-    spec:
-      allow:
-        logins:
-          - ubuntu
-          - ec2-user
-        node_labels:
-          team: "{{internal.team}}"
-        host_groups: []
-        host_sudoers: []
-      deny:
-        logins:
-          - root
-        host_sudoers:
-          - "*"
-      options:
-        max_session_ttl: 8h
-        forward_agent: false
-        port_forwarding: false
-        enhanced_recording:
-          - command
-          - network
-        permit_x11_forwarding: false
-        lock: best_effort
-        request_access: optional
-
-  role-ssh-root-access.yaml: |
-    kind: role
-    version: v7
-    metadata:
-      name: ssh-root-access
-      description: "SSH access to team-labeled nodes with sudo/root elevation"
-    spec:
-      allow:
-        logins:
-          - ubuntu
-          - ec2-user
-          - root
-        node_labels:
-          team: "{{internal.team}}"
-        host_sudoers:
-          - "ubuntu ALL=(ALL) NOPASSWD: ALL"
-          - "ec2-user ALL=(ALL) NOPASSWD: ALL"
-      deny: {}
-      options:
-        max_session_ttl: 4h
-        forward_agent: false
-        port_forwarding: false
-        enhanced_recording:
-          - command
-          - network
-        permit_x11_forwarding: false
-        lock: best_effort
-        request_access: optional
-
   role-auto-approver.yaml: |
     kind: role
     version: v7
     metadata:
       name: auto-approver
-      description: "Machine ID role: approves pure ssh-access and okta_ssh requests only"
+      description: "Machine ID role: approves pure okta_ssh requests only"
     spec:
       allow:
         review_requests:
           roles:
-            - ssh-access
             - okta_ssh
           where: >
-            (contains(request.roles, "ssh-access") &&
-            !contains(request.roles, "ssh-root-access") &&
-            !contains(request.roles, "kube-access")) ||
-            (contains(request.roles, "okta_ssh") &&
+            contains(request.roles, "okta_ssh") &&
             !contains(request.roles, "okta_ssh_root") &&
-            !contains(request.roles, "okta_kube"))
+            !contains(request.roles, "okta_kube")
       deny: {}
       options:
         max_session_ttl: 1h

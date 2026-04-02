@@ -104,9 +104,6 @@ spec:
               for f in \
                 login-rule-okta-team.yaml \
                 role-base.yaml \
-                role-kube-access.yaml \
-                role-ssh-access.yaml \
-                role-ssh-root-access.yaml \
                 role-auto-approver.yaml \
                 role-okta-base.yaml \
                 role-okta-kube.yaml \
