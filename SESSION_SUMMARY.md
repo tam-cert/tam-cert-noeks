@@ -179,3 +179,113 @@ If state lock exists first:
 1. Add `terraform force-unlock -force <lock-id>` step before destroy in workflow (see PR #30 pattern)
 2. Merge, then trigger destroy
 
+
+---
+
+## Session — 2026-04-02
+
+### PRs Merged
+
+| PR | Branch | Description |
+|---|---|---|
+| #66 | `feat/okta-rbac-roles-argocd` | Add `okta_*` RBAC roles, migrate RBAC apply from GH Actions jinja2/tbot/tctl to ArgoCD GitOps |
+| #67 | `deploy/apply-20260402` | Fresh deploy trigger (plan only — apply not triggered, workflow bug) |
+| #68 | `deploy/apply-20260402b` | Fresh deploy trigger (same — workflow bug not yet fixed) |
+| #69 | `fix/workflow-apply-trigger` | Fix workflow: remove `paths` filter from push trigger, add `action=apply` to plan job `if`, tighten apply `needs` condition |
+| #70 | `fix/rbac-sync-job-idempotent-volume` | Make ArgoCD PostSync Job idempotent — check for stale `rbac-sync` volume before patching, move cleanup to `trap EXIT` |
+| #71 | `fix/saml-connector-ownership` | Move SAML connector ownership fully to Ansible; remove from ArgoCD apply loop to eliminate split-brain |
+| #75 | `fix/rbac-cleanup` | Combined: role annotations list format fix, login rule groups trait, remove duplicate `kube-access`/`ssh-access`/`ssh-root-access` roles |
+| #76 | `fix/ssh-node-team-label` | Change ssh-node-1 `team` label from `platform` → `okta-teleport-users` in Terraform and userdata |
+| #77 | `fix/node-labels-wildcard` | `okta_ssh`/`okta_ssh_root` node_labels use `team: '*'` — `{{internal.team}}` list expansion doesn't work as label selector |
+| #78 | `fix/enhanced-recording-bpf` | Enable BPF enhanced session recording on ssh-node-1 — `enhanced_recording` under `ssh_service`, mount `/cgroup2`, `systemctl daemon-reexec` |
+| #79 | `fix/admin-group-auditor-role` | Add `auditor` role to `okta-teleport-admins` SAML mapping — required for session recording visibility in UI |
+
+**Closed/superseded**: PRs #72, #73, #74 (combined into #75)
+
+---
+
+### New Roles — `okta_*` RBAC Model
+
+| Role | Description |
+|---|---|
+| `okta_base` | No standing privileges. Can request `okta_kube`, `okta_ssh`, `okta_ssh_root`. `okta_ssh`-only auto-approved. |
+| `okta_kube` | K8s namespace access scoped to `{{internal.team}}` |
+| `okta_ssh` | SSH to team-labeled nodes, root denied |
+| `okta_ssh_root` | SSH with sudo, 4h TTL |
+
+**SAML mappings** (final):
+- `*` → `base`
+- `okta-teleport-admins` → `editor`, `access`, `auditor`
+- `okta-teleport-users` → `okta_base`
+
+**Removed**: `kube-access`, `ssh-access`, `ssh-root-access` (superseded by `okta_*`)
+
+---
+
+### ArgoCD GitOps RBAC Pattern
+
+All Teleport RBAC resources are now managed via ArgoCD:
+- **Manifest location**: `argocd/apps/teleport-rbac/`
+- **ConfigMap**: `teleport-rbac-files` in `teleport` namespace — contains all role YAMLs as inline data
+- **PostSync Job**: `teleport-rbac-apply` — patches `rbac-sync` volume onto `teleport-auth`, execs `tctl create -f` for each file, cleans up via `trap EXIT`
+- **SAML connector**: owned by Ansible step 11 (`argocd` role) — applied after ArgoCD sync completes and custom roles exist. Never managed by ArgoCD to avoid chicken-and-egg rejection from `tctl`.
+
+**ArgoCD Application**: `argocd/apps/teleport-rbac-app.yaml` — automated sync, `selfHeal: true`, `prune: false`
+
+---
+
+### Key Lessons Learned This Session
+
+#### GH Actions apply workflow — paths filter on push
+The `push` trigger had a `paths` filter (`terraform/**`, `ansible/**`). Deploy PRs use empty commits with no file changes — merge to main never fired the apply job. **Fix**: remove `paths` filter from `push` trigger (keep it on `pull_request` to avoid noisy plan runs).
+
+#### GH Actions apply — plan job skipped on `workflow_dispatch action=apply`
+The `plan` job `if` condition only matched `action == 'plan'`. On `workflow_dispatch action=apply`, plan was skipped, causing the `needs: plan` apply job to also be skipped. **Fix**: add `action == 'apply'` to plan job `if` condition.
+
+#### ArgoCD PostSync Job — stale volume crash loop
+The PostSync Job patches a `rbac-sync` volume onto `teleport-auth` for `tctl` access. If the job crashes before cleanup, the volume stays mounted. The next sync attempt hits `Duplicate value: "rbac-sync"` and crashes immediately. **Fix**: check if volume already present before patching; move cleanup to `trap EXIT` so it always runs.
+
+#### SAML connector split brain
+Ansible seeded the SAML connector into `teleport-rbac-files` ConfigMap at deploy time with stale role mappings. ArgoCD adopted the ConfigMap but the PostSync Job kept crashing before it could apply the corrected SAML connector. **Fix**: Ansible owns the SAML connector end-to-end. Bootstrap connector (step 8, built-in roles only) → ArgoCD applies custom roles (step 11) → Ansible applies full connector with `okta_base` mapping after ArgoCD sync.
+
+#### Login rule `traits_map` drops all unlisted traits
+`traits_map` in a `login_rule` **replaces** all traits — it does not merge. The `okta-team-trait` rule only listed `logins` and `team`, so `groups` was silently dropped. The SAML `attributes_to_roles` mapping is evaluated against traits **after** login rules run — with `groups` missing, no roles could be mapped. **Fix**: add `groups: [external.groups]` to `traits_map`.
+
+#### `{{internal.team}}` doesn't work in `node_labels` when trait is a list
+When a user is in multiple Okta groups, `internal.team` resolves to a list (e.g. `[okta-teleport-users, Everyone]`). Teleport does not iterate list values for node label matching — the whole list is treated as a single string that never matches the node's label. **Fix**: use `team: '*'` in `node_labels`. Access control is enforced at the request layer (`okta_base` thresholds).
+
+#### BPF enhanced recording — cgroup2 and `daemon-reexec`
+- Field is `enhanced_recording` under `ssh_service` in v3 config (not `enhanced_session_recording`, not top-level)
+- `cgroup_path` must be `/cgroup2` — using `/sys/fs/cgroup` conflicts with systemd's own cgroup hierarchy and causes `status=219/CGROUP`
+- After mounting `/cgroup2` in cloud-init, `systemctl daemon-reexec` is required before starting Teleport — otherwise systemd fails to create the service cgroup
+
+#### `auditor` role required for session recording UI
+`editor` has `session_recording_config` permissions (manage config) but not `session: [list, read]` (view recordings). The `auditor` role is required for Activity → Session Recordings to show recordings. Admin group needs `editor` + `access` + `auditor`.
+
+---
+
+### Current Cluster State (as of 2026-04-02 session end)
+
+**Master public IP**: `54.202.164.27` (from apply run #23924325857)
+**ssh-node-1 private IP**: `172.49.20.157`
+
+### Running services
+- Teleport Enterprise 18.7.1 — proxy NodePort 32443, self-signed cert
+- Teleport Access Graph 1.29.6 — healthy
+- PostgreSQL — healthy
+- ssh-node-1 — registered, `team=okta-teleport-users`, BPF enhanced recording active
+- ArgoCD — synced, PostSync Job applying RBAC via GitOps
+
+### RBAC state
+- `base`, `okta_base`, `okta_kube`, `okta_ssh`, `okta_ssh_root`, `auto-approver` — all applied
+- `kube-access`, `ssh-access`, `ssh-root-access` — deleted
+- SAML connector: `*→base`, `okta-teleport-admins→editor+access+auditor`, `okta-teleport-users→okta_base`
+- Login rule: `groups`, `logins`, `team` all forwarded
+
+### Verified end-to-end
+- ✅ `okta-teleport-users` login → lands with `base` + `okta_base`, zero standing privileges
+- ✅ Access request for `okta_ssh` → auto-approved by bot
+- ✅ Access request for `okta_ssh_root` → manually approved
+- ✅ ssh-node-1 visible and accessible after assuming role
+- ✅ Session recordings uploaded to S3 with `enhanced_recording: true`
+- ✅ Session recordings visible in UI for `okta-teleport-admins`
