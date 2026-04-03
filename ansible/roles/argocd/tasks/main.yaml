@@ -538,13 +538,40 @@
   ansible.builtin.set_fact:
     mcp_token_value: "{{ teleport_env_skynet.stdout | regex_search('MCP_TOKEN_VALUE=(.+)', '\\1') | first }}"
 
-- name: Apply MCP join token via tctl
+- name: Apply MCP join token via tctl create
   ansible.builtin.shell:
     cmd: |
       AUTH_POD=$(kubectl get pod -n teleport -l app.kubernetes.io/component=auth \
         -o jsonpath='{.items[0].metadata.name}')
-      kubectl exec -n teleport $AUTH_POD -- \
-        tctl tokens add --type=app,node --ttl=0 --value={{ mcp_token_value }}
+      # Write token resource to a ConfigMap and apply via mount pattern
+      # tctl tokens add --ttl=0 is not valid; use tctl create with a token resource instead
+      kubectl create configmap mcp-token-patch -n teleport \
+        --from-literal=mcp-token.yaml="kind: token
+version: v2
+metadata:
+  name: {{ mcp_token_value }}
+spec:
+  roles:
+    - App
+    - Node" \
+        --dry-run=client -o yaml | kubectl apply -f -
+      kubectl patch deployment teleport-auth -n teleport --type=json -p='[
+        {"op":"add","path":"/spec/template/spec/volumes/-","value":{"name":"mcp-token-patch","configMap":{"name":"mcp-token-patch"}}},
+        {"op":"add","path":"/spec/template/spec/containers/0/volumeMounts/-","value":{"name":"mcp-token-patch","mountPath":"/tmp/mcp-token-patch","readOnly":true}}
+      ]'
+      kubectl rollout status deployment/teleport-auth -n teleport --timeout=120s
+      AUTH_POD=$(kubectl get pod -n teleport -l app.kubernetes.io/component=auth \
+        -o jsonpath='{.items[0].metadata.name}')
+      kubectl exec -n teleport $AUTH_POD -- tctl create -f /tmp/mcp-token-patch/mcp-token.yaml
+      VOL_IDX=$(kubectl get deployment teleport-auth -n teleport \
+        -o jsonpath='{range .spec.template.spec.volumes[*]}{.name}{"\n"}{end}' | \
+        awk '/^mcp-token-patch$/{print NR-1; exit}')
+      MOUNT_IDX=$(kubectl get deployment teleport-auth -n teleport \
+        -o jsonpath='{range .spec.template.spec.containers[0].volumeMounts[*]}{.name}{"\n"}{end}' | \
+        awk '/^mcp-token-patch$/{print NR-1; exit}')
+      kubectl patch deployment teleport-auth -n teleport --type=json \
+        -p="[{\"op\":\"remove\",\"path\":\"/spec/template/spec/containers/0/volumeMounts/${MOUNT_IDX}\"},{\"op\":\"remove\",\"path\":\"/spec/template/spec/volumes/${VOL_IDX}\"}]"
+      kubectl delete configmap mcp-token-patch -n teleport
     executable: /bin/bash
   environment:
     KUBECONFIG: /home/ubuntu/.kube/config
