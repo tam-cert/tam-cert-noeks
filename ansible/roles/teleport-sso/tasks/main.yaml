@@ -104,10 +104,12 @@
 - name: Cleanup SAML bootstrap volume and ConfigMap
   ansible.builtin.shell:
     cmd: |
-      MOUNT_IDX=$(kubectl get deployment teleport-auth -n teleport -o json | \
-        python3 -c "import json,sys; d=json.load(sys.stdin); mounts=d['spec']['template']['spec']['containers'][0].get('volumeMounts',[]); idxs=[str(i) for i,m in enumerate(mounts) if m['name']=='saml-bootstrap']; print(idxs[0] if idxs else '')")
-      VOL_IDX=$(kubectl get deployment teleport-auth -n teleport -o json | \
-        python3 -c "import json,sys; d=json.load(sys.stdin); vols=d['spec']['template']['spec'].get('volumes',[]); idxs=[str(i) for i,v in enumerate(vols) if v['name']=='saml-bootstrap']; print(idxs[0] if idxs else '')")
+      VOL_IDX=$(kubectl get deployment teleport-auth -n teleport \
+        -o jsonpath='{range .spec.template.spec.volumes[*]}{.name}{"\n"}{end}' | \
+        awk '/^saml-bootstrap$/{print NR-1; exit}')
+      MOUNT_IDX=$(kubectl get deployment teleport-auth -n teleport \
+        -o jsonpath='{range .spec.template.spec.containers[0].volumeMounts[*]}{.name}{"\n"}{end}' | \
+        awk '/^saml-bootstrap$/{print NR-1; exit}')
       kubectl patch deployment teleport-auth -n teleport --type=json \
         -p="[{\"op\":\"remove\",\"path\":\"/spec/template/spec/containers/0/volumeMounts/${MOUNT_IDX}\"},{\"op\":\"remove\",\"path\":\"/spec/template/spec/volumes/${VOL_IDX}\"}]"
       kubectl rollout status deployment/teleport-auth -n teleport --timeout=120s
@@ -118,10 +120,20 @@
     KUBECONFIG: /home/ubuntu/.kube/config
   changed_when: true
 
+- name: Get auth pod name after cleanup rollout
+  ansible.builtin.command:
+    cmd: >
+      kubectl get pod -n teleport -l app.kubernetes.io/component=auth
+      -o jsonpath='{.items[0].metadata.name}'
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  register: auth_pod_final
+  changed_when: false
+
 - name: Verify SAML connector was created
   ansible.builtin.command:
     cmd: >
-      kubectl exec -n teleport {{ auth_pod_after.stdout }}
+      kubectl exec -n teleport {{ auth_pod_final.stdout }}
       -- tctl get saml/okta
   environment:
     KUBECONFIG: /home/ubuntu/.kube/config
