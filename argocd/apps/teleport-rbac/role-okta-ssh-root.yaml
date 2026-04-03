@@ -9,7 +9,7 @@ spec:
       - ubuntu
       - root
     node_labels:
-      team: "{{internal.team}}"
+      team: '*'
     host_sudoers:
       - "ubuntu ALL=(ALL) NOPASSWD: ALL"
   deny: {}
