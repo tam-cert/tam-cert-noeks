@@ -268,6 +268,26 @@ data:
         lock: best_effort
         request_access: optional
 
+  role-okta-reviewer.yaml: |
+    kind: role
+    version: v7
+    metadata:
+      name: okta_reviewer
+      description: "Review access requests for okta_ssh_root and okta_kube"
+    spec:
+      allow:
+        review_requests:
+          preview_as_roles:
+            - okta_ssh_root
+            - okta_kube
+          roles:
+            - okta_ssh_root
+            - okta_kube
+      deny: {}
+      options:
+        max_session_ttl: 30h0m0s
+        lock: best_effort
+
   cluster-auth-preference.yaml: |
     kind: cluster_auth_preference
     version: v2

@@ -112,6 +112,7 @@ spec:
                 role-okta-kube.yaml \
                 role-okta-ssh.yaml \
                 role-okta-ssh-root.yaml \
+                role-okta-reviewer.yaml \
                 inference-model.yaml \
                 inference-policy.yaml \
                 kube-cluster-label.yaml; do
