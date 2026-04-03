@@ -289,3 +289,80 @@ When a user is in multiple Okta groups, `internal.team` resolves to a list (e.g.
 - ✅ ssh-node-1 visible and accessible after assuming role
 - ✅ Session recordings uploaded to S3 with `enhanced_recording: true`
 - ✅ Session recordings visible in UI for `okta-teleport-admins`
+
+---
+
+## Session — 2026-04-03 (continued)
+
+### PRs Merged
+
+| PR | Branch | Description |
+|---|---|---|
+| #80 | `feat/ai-session-summary` | AI session summary via Skynet inference endpoint — `inference_model`, `inference_policy` via ArgoCD; `inference_secret` via Ansible post-sync |
+| #81 | `fix/s3-list-bucket-versions` | Add `s3:ListBucketVersions` + `s3:GetObjectVersion` to sessions bucket IAM policy — required for AI session summary to read recordings from S3 |
+
+---
+
+### AI Session Summary Implementation
+
+**Resources:**
+
+| Resource | Kind | Applied by |
+|---|---|---|
+| `skynet-gemma` | `inference_model` | ArgoCD PostSync Job |
+| `skynet-gemma-policy` | `inference_policy` | ArgoCD PostSync Job |
+| `grant-skynet-secret` | `inference_secret` | Ansible `argocd` role (post-sync, ConfigMap mount pattern) |
+
+**Model**: `gemma3:4b` via OpenAI-compatible endpoint at `skynet.gvteleport.com:443`
+**Policy**: applies to `ssh` session kind
+
+**Secret handling**: `SKYNET_API_KEY` GH Actions secret → Terraform var → written to `.teleport-env` → read by Ansible → written via `python3 yaml.dump` (handles special chars) → applied via ConfigMap mount + `tctl create -f`
+
+**S3 permissions added** (`terraform/rds.tf`):
+- `s3:ListBucketVersions` — required for inference service to locate session recording objects
+- `s3:GetObjectVersion` — required to read versioned session recording objects
+
+---
+
+### Access Graph "Failed to fetch" — Root Cause & Fix
+
+**Symptom**: UI showed "An error generating Access Graph / Network error (Failed to fetch)"
+
+**Root cause**: The `teleport-auth` pod had lost its connection to the Access Graph service. The Helm values were correct (`access_graph.endpoint` was set), but repeated auth pod restarts from the ArgoCD PostSync Job volume mount/unmount cycle caused the in-memory gRPC connection to Access Graph to drop without re-establishing.
+
+**Fix**: Re-run `helm upgrade` with both values files to trigger an auth pod rollout:
+```bash
+helm upgrade teleport teleport/teleport-cluster \
+  --namespace teleport \
+  --version 18.7.1 \
+  --values /home/ubuntu/teleport-values.yaml \
+  --values /home/ubuntu/teleport-access-graph-patch.yaml \
+  --wait --timeout 10m
+```
+
+**Prevention**: The ArgoCD PostSync Job should avoid unnecessary auth pod restarts. The idempotent volume patch (PR #70) reduces this, but any auth pod restart can drop the Access Graph connection. If this recurs, the helm upgrade above is the recovery procedure.
+
+---
+
+### Access Graph Warnings (cosmetic, non-blocking)
+Access Graph logs show repeated warnings:
+```
+"role kube-access not found" / "role ssh-access not found" / "role ssh-root-access not found"
+```
+These are from Access Graph trying to expand request roles that referenced the old deleted roles. They are harmless — Access Graph will stop seeing these once it completes a full resync cycle. No action needed.
+
+---
+
+### Current Cluster State (as of 2026-04-03)
+
+**Master public IP**: `54.202.164.27`
+**ssh-node-1 private IP**: `172.49.20.157`
+
+### Verified end-to-end
+- ✅ Okta SSO login → `base` + `okta_base`
+- ✅ Access requests — `okta_ssh` auto-approved, `okta_ssh_root` manual
+- ✅ ssh-node-1 visible after role assumption, BPF enhanced recording active
+- ✅ Session recordings in S3 + visible in UI (`auditor` role on admin group)
+- ✅ Access Graph — connected and healthy (after helm upgrade)
+- ✅ AI session summary — `inference_model` + `inference_policy` + `inference_secret` applied
+- ✅ S3 IAM policy includes `s3:ListBucketVersions` + `s3:GetObjectVersion`
