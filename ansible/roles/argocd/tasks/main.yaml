@@ -407,6 +407,7 @@
             roles:
               - editor
               - access
+              - auditor
           - name: "groups"
             value: "{{ okta_groups_access }}"
             roles:
