@@ -1,0 +1,12 @@
+kind: access_monitoring_rule
+version: v1
+metadata:
+  name: okta_ssh_auto_approve
+spec:
+  subjects:
+    - access_request
+  condition: contains_all(set("okta_ssh"), access_request.spec.roles)
+  desired_state: reviewed
+  automatic_review:
+    decision: APPROVED
+    integration: builtin

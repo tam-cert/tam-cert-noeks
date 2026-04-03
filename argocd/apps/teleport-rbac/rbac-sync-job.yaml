@@ -108,6 +108,7 @@ spec:
                 role-ssh-access.yaml \
                 role-ssh-root-access.yaml \
                 role-auto-approver.yaml \
+                access-monitoring-rule-okta-ssh.yaml \
                 role-okta-base.yaml \
                 role-okta-kube.yaml \
                 role-okta-ssh.yaml \

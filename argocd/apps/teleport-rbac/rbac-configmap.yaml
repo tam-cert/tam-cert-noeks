@@ -159,6 +159,20 @@ data:
       options:
         max_session_ttl: 1h
 
+  access-monitoring-rule-okta-ssh.yaml: |
+    kind: access_monitoring_rule
+    version: v1
+    metadata:
+      name: okta_ssh_auto_approve
+    spec:
+      subjects:
+        - access_request
+      condition: contains_all(set("okta_ssh"), access_request.spec.roles)
+      desired_state: reviewed
+      automatic_review:
+        decision: APPROVED
+        integration: builtin
+
   role-okta-base.yaml: |
     kind: role
     version: v7
