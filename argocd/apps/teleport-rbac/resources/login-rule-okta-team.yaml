@@ -8,5 +8,7 @@ spec:
   traits_map:
     logins:
       - external.logins
+    groups:
+      - external.groups
     team:
       - external.groups

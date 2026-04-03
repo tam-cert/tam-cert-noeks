@@ -318,7 +318,7 @@
     cmd: |
       kubectl patch configmap argocd-cm -n argocd --type=merge -p '{
         "data": {
-          "resource.exclusions": "- apiGroups:\n  - \"\"\n  kinds:\n  - role\n  - login_rule\n  - cluster_auth_preference\n  - saml\n  - kube_cluster\n  clusters:\n  - \"*\"\n"
+          "resource.exclusions": "- apiGroups:\n  - \"\"\n  kinds:\n  - role\n  - login_rule\n  - cluster_auth_preference\n  - saml\n  - kube_cluster\n  - access_monitoring_rule\n  - inference_model\n  - inference_policy\n  clusters:\n  - \"*\"\n"
         }
       }'
     executable: /bin/bash
