@@ -20,7 +20,7 @@ spec:
       exclude: 'resources/*'
   destination:
     server: https://kubernetes.default.svc
-    namespace: argocd
+    namespace: teleport
   syncPolicy:
     automated:
       prune: false
