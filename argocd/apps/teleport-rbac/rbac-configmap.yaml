@@ -29,112 +29,13 @@ data:
     version: v7
     metadata:
       name: base
-      description: "Base role: no standing privileges, request-only access"
+      description: "Base role: no standing privileges, assigned to all Okta users via SAML wildcard"
     spec:
-      allow:
-        request:
-          roles:
-            - kube-access
-            - ssh-access
-            - ssh-root-access
-          thresholds:
-            - name: ssh-access auto-approval
-              filter: 'contains(request.roles, "ssh-access") && !contains(request.roles, "ssh-root-access") && !contains(request.roles, "kube-access")'
-              approve: 1
-              deny: 1
-            - name: manual approval
-              filter: 'contains(request.roles, "ssh-root-access") || contains(request.roles, "kube-access")'
-              approve: 1
-              deny: 1
-          annotations:
-            reason: '[{"required":true}]'
+      allow: {}
       deny: {}
       options:
         max_session_ttl: 8h
         lock: best_effort
-
-  role-kube-access.yaml: |
-    kind: role
-    version: v7
-    metadata:
-      name: kube-access
-      description: "Kubernetes access scoped to team namespace derived from SSO trait"
-    spec:
-      allow:
-        kubernetes_groups:
-          - "{{internal.team}}"
-        kubernetes_labels:
-          "*": "*"
-        kubernetes_resources:
-          - kind: "*"
-            namespace: "{{internal.team}}"
-            name: "*"
-            verbs: ["*"]
-      deny: {}
-      options:
-        max_session_ttl: 8h
-        request_access: optional
-        lock: best_effort
-
-  role-ssh-access.yaml: |
-    kind: role
-    version: v7
-    metadata:
-      name: ssh-access
-      description: "SSH access to team-labeled nodes, no root elevation"
-    spec:
-      allow:
-        logins:
-          - ubuntu
-          - ec2-user
-        node_labels:
-          team: '*'
-        host_groups: []
-        host_sudoers: []
-      deny:
-        logins:
-          - root
-        host_sudoers:
-          - "*"
-      options:
-        max_session_ttl: 8h
-        forward_agent: false
-        port_forwarding: false
-        enhanced_recording:
-          - command
-          - network
-        permit_x11_forwarding: false
-        lock: best_effort
-        request_access: optional
-
-  role-ssh-root-access.yaml: |
-    kind: role
-    version: v7
-    metadata:
-      name: ssh-root-access
-      description: "SSH access to team-labeled nodes with sudo/root elevation"
-    spec:
-      allow:
-        logins:
-          - ubuntu
-          - ec2-user
-          - root
-        node_labels:
-          team: '*'
-        host_sudoers:
-          - "ubuntu ALL=(ALL) NOPASSWD: ALL"
-          - "ec2-user ALL=(ALL) NOPASSWD: ALL"
-      deny: {}
-      options:
-        max_session_ttl: 4h
-        forward_agent: false
-        port_forwarding: false
-        enhanced_recording:
-          - command
-          - network
-        permit_x11_forwarding: false
-        lock: best_effort
-        request_access: optional
 
   role-auto-approver.yaml: |
     kind: role
