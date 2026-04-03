@@ -8,8 +8,8 @@
 #   PostSync → This Job mounts the ConfigMap, execs tctl create -f for each file
 #   Cleanup  → Job deleted by ArgoCD after TTL (hook-delete-policy)
 #
-# Idempotency: volume/mount existence is checked before patching so the job
-# is safe to re-run if a previous attempt crashed before cleanup.
+# Idempotency: volume/mount existence is checked via kubectl jsonpath (no python3/jq needed).
+# bitnami/kubectl image has no python3 or jq — all JSON inspection uses kubectl jsonpath.
 ---
 apiVersion: batch/v1
 kind: Job
@@ -37,28 +37,25 @@ spec:
               # ── Cleanup function — always runs on exit (success or failure) ──
               cleanup() {
                 echo "=== Cleanup: removing rbac-sync volume/mount if present ==="
-                MOUNT_IDX=$(kubectl get deployment teleport-auth -n teleport -o json | \
-                  python3 -c "
-              import json,sys
-              d=json.load(sys.stdin)
-              mounts=d['spec']['template']['spec']['containers'][0].get('volumeMounts',[])
-              idxs=[str(i) for i,m in enumerate(mounts) if m['name']=='rbac-sync']
-              print(idxs[0] if idxs else '')
-              " 2>/dev/null)
-                VOL_IDX=$(kubectl get deployment teleport-auth -n teleport -o json | \
-                  python3 -c "
-              import json,sys
-              d=json.load(sys.stdin)
-              vols=d['spec']['template']['spec'].get('volumes',[])
-              idxs=[str(i) for i,v in enumerate(vols) if v['name']=='rbac-sync']
-              print(idxs[0] if idxs else '')
-              " 2>/dev/null)
-                if [ -n "${MOUNT_IDX}" ] && [ -n "${VOL_IDX}" ]; then
-                  kubectl patch deployment teleport-auth -n teleport --type=json -p="[
-                    {\"op\":\"remove\",\"path\":\"/spec/template/spec/containers/0/volumeMounts/${MOUNT_IDX}\"},
-                    {\"op\":\"remove\",\"path\":\"/spec/template/spec/volumes/${VOL_IDX}\"}
-                  ]" && echo "Volume/mount removed." || echo "WARN: cleanup patch failed, may need manual removal."
-                  kubectl rollout status deployment/teleport-auth -n teleport --timeout=120s || true
+                # Check if volume exists using jsonpath — no python3/jq needed
+                VOL_NAME=$(kubectl get deployment teleport-auth -n teleport \
+                  -o jsonpath='{.spec.template.spec.volumes[*].name}' 2>/dev/null | \
+                  tr ' ' '\n' | grep '^rbac-sync$' || true)
+                if [ "${VOL_NAME}" = "rbac-sync" ]; then
+                  # Get index using awk on jsonpath array output
+                  VOL_IDX=$(kubectl get deployment teleport-auth -n teleport \
+                    -o jsonpath='{range .spec.template.spec.volumes[*]}{.name}{"\n"}{end}' | \
+                    awk '/^rbac-sync$/{print NR-1; exit}')
+                  MOUNT_IDX=$(kubectl get deployment teleport-auth -n teleport \
+                    -o jsonpath='{range .spec.template.spec.containers[0].volumeMounts[*]}{.name}{"\n"}{end}' | \
+                    awk '/^rbac-sync$/{print NR-1; exit}')
+                  if [ -n "${VOL_IDX}" ] && [ -n "${MOUNT_IDX}" ]; then
+                    kubectl patch deployment teleport-auth -n teleport --type=json -p="[
+                      {\"op\":\"remove\",\"path\":\"/spec/template/spec/containers/0/volumeMounts/${MOUNT_IDX}\"},
+                      {\"op\":\"remove\",\"path\":\"/spec/template/spec/volumes/${VOL_IDX}\"}
+                    ]" && echo "Volume/mount removed." || echo "WARN: cleanup patch failed."
+                    kubectl rollout status deployment/teleport-auth -n teleport --timeout=120s || true
+                  fi
                 else
                   echo "No rbac-sync volume found — nothing to clean up."
                 fi
@@ -73,15 +70,11 @@ spec:
               echo "Auth pod: ${AUTH_POD}"
 
               echo "=== Checking if rbac-sync volume already mounted ==="
-              ALREADY_MOUNTED=$(kubectl get deployment teleport-auth -n teleport -o json | \
-                python3 -c "
-              import json,sys
-              d=json.load(sys.stdin)
-              vols=d['spec']['template']['spec'].get('volumes',[])
-              print('yes' if any(v['name']=='rbac-sync' for v in vols) else 'no')
-              " 2>/dev/null)
+              ALREADY_MOUNTED=$(kubectl get deployment teleport-auth -n teleport \
+                -o jsonpath='{.spec.template.spec.volumes[*].name}' 2>/dev/null | \
+                tr ' ' '\n' | grep '^rbac-sync$' || true)
 
-              if [ "${ALREADY_MOUNTED}" = "yes" ]; then
+              if [ "${ALREADY_MOUNTED}" = "rbac-sync" ]; then
                 echo "rbac-sync volume already present (leftover from prior run) — skipping patch."
               else
                 echo "=== Patching auth deployment to mount RBAC ConfigMap ==="
@@ -118,7 +111,7 @@ spec:
                 echo "--- Applying ${f} ---"
                 kubectl exec -n teleport "${AUTH_POD}" -- \
                   tctl create -f "/tmp/rbac-sync/${f}" && echo "${f}: OK" \
-                  || echo "${f}: WARN (may already exist)"
+                  || echo "${f}: WARN (may already exist or non-fatal)"
               done
 
               echo "--- Applying cluster-auth-preference.yaml ---"
@@ -129,3 +122,4 @@ spec:
 
               echo "=== RBAC sync complete ==="
               # cleanup() runs automatically via trap EXIT
+
