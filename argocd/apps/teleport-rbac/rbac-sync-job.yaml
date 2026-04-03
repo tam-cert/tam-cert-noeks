@@ -94,20 +94,20 @@ spec:
               echo "Auth pod after mount: ${AUTH_POD}"
 
               echo "=== Applying RBAC resources via tctl ==="
+              set +e
               for f in \
                 login-rule-okta-team.yaml \
                 role-base.yaml \
                 role-auto-approver.yaml \
-                access-monitoring-rule-okta-ssh.yaml \
                 role-okta-base.yaml \
                 role-okta-kube.yaml \
                 role-okta-ssh.yaml \
                 role-okta-ssh-root.yaml \
                 role-okta-reviewer.yaml \
                 role-mcp-ollama-tools.yaml \
+                access-monitoring-rule-okta-ssh.yaml \
                 inference-model.yaml \
-                inference-policy.yaml \
-                kube-cluster-label.yaml; do
+                inference-policy.yaml; do
                 echo "--- Applying ${f} ---"
                 kubectl exec -n teleport "${AUTH_POD}" -- \
                   tctl create -f "/tmp/rbac-sync/${f}" && echo "${f}: OK" \
@@ -119,6 +119,13 @@ spec:
                 tctl create --confirm -f "/tmp/rbac-sync/cluster-auth-preference.yaml" \
                 && echo "cluster-auth-preference.yaml: OK" \
                 || echo "cluster-auth-preference.yaml: WARN"
+
+              echo "--- Applying kube-cluster-label.yaml ---"
+              kubectl exec -n teleport "${AUTH_POD}" -- \
+                tctl create --confirm -f "/tmp/rbac-sync/kube-cluster-label.yaml" \
+                && echo "kube-cluster-label.yaml: OK" \
+                || echo "kube-cluster-label.yaml: WARN (cluster may not be registered yet)"
+              set -e
 
               echo "=== RBAC sync complete ==="
               # cleanup() runs automatically via trap EXIT
