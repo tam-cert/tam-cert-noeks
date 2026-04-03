@@ -12,3 +12,14 @@ clusterHostCAs:
 # Single replica — lab cluster has limited nodes; chart default of 2 causes
 # --wait timeout when the second pod cannot schedule in time.
 replicaCount: 1
+
+identity_activity_center:
+  enabled: true
+  region: us-west-2
+  database: grant-tam-identity-activity
+  table: grant-tam-audit-events
+  s3: s3://grant-tam-identity-activity-long/data/
+  s3_results: s3://grant-tam-identity-activity-transient/results/
+  s3_large_files: s3://grant-tam-identity-activity-transient/large_files
+  workgroup: grant-tam-identity-activity
+  sqs_queue_url: https://sqs.us-west-2.amazonaws.com/278576220453/grantvoss-q-1
