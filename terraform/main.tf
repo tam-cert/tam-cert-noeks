@@ -59,6 +59,11 @@ variable "skynet_api_key" {
   sensitive   = true
 }
 
+variable "mcp_token_value" {
+  description = "Static token value for the MCP app/node join token"
+  sensitive   = true
+}
+
 # ─── IAM Role for EC2 instances ──────────────────────────────────────────────
 
 resource "aws_iam_role" "ec2" {
@@ -317,6 +322,7 @@ locals {
     printf 'export OKTA_GROUPS_EDITOR=%s\n' "${var.okta_groups_editor}" >> /home/ubuntu/.teleport-env
     printf 'export OKTA_GROUPS_ACCESS=%s\n' "${var.okta_groups_access}" >> /home/ubuntu/.teleport-env
     printf 'export SKYNET_API_KEY=%s\n' "${var.skynet_api_key}" >> /home/ubuntu/.teleport-env
+    printf 'export MCP_TOKEN_VALUE=%s\n' "${var.mcp_token_value}" >> /home/ubuntu/.teleport-env
     printf 'export GITHUB_REPOSITORY=grantvoss-teleport/tam-cert-noeks\n' >> /home/ubuntu/.teleport-env
     printf "export POSTGRES_ADMIN_PASSWORD='%s'\n" "${random_password.postgres_admin.result}" >> /home/ubuntu/.teleport-env
     printf "export ACCESS_GRAPH_DB_PASSWORD='%s'\n" "${random_password.access_graph_db.result}" >> /home/ubuntu/.teleport-env

@@ -1,0 +1,16 @@
+kind: role
+version: v6
+metadata:
+  name: mcp-ollama-tools
+  description: "Access to MCP Ollama tools via Teleport app access"
+spec:
+  allow:
+    app_labels:
+      env: dev
+    mcp:
+      tools:
+        - "*"
+  deny: {}
+  options:
+    max_session_ttl: 8h
+    lock: best_effort

@@ -113,6 +113,7 @@ spec:
                 role-okta-ssh.yaml \
                 role-okta-ssh-root.yaml \
                 role-okta-reviewer.yaml \
+                role-mcp-ollama-tools.yaml \
                 inference-model.yaml \
                 inference-policy.yaml \
                 kube-cluster-label.yaml; do

@@ -409,6 +409,7 @@
               - access
               - auditor
               - okta_reviewer
+              - mcp-ollama-tools
           - name: "groups"
             value: "{{ okta_groups_access }}"
             roles:
@@ -517,6 +518,35 @@
 - name: Print inference secret status
   ansible.builtin.debug:
     msg: "{{ inf_secret_verify.stdout_lines }}"
+
+# ── Apply MCP static join token ───────────────────────────────────────────────
+# The MCP server is outside the cluster so it joins via a static token.
+# Token value sourced from MCP_TOKEN_VALUE in .teleport-env (GH secret).
+# TTL=0 means the token never expires (permanent static token).
+
+- name: Set MCP token value fact
+  ansible.builtin.set_fact:
+    mcp_token_value: "{{ teleport_env_skynet.stdout | regex_search('MCP_TOKEN_VALUE=(.+)', '\\1') | first }}"
+
+- name: Apply MCP join token via tctl
+  ansible.builtin.shell:
+    cmd: |
+      AUTH_POD=$(kubectl get pod -n teleport -l app.kubernetes.io/component=auth \
+        -o jsonpath='{.items[0].metadata.name}')
+      kubectl exec -n teleport $AUTH_POD -- \
+        tctl tokens add --type=app,node --ttl=0 --value={{ mcp_token_value }}
+    executable: /bin/bash
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  register: mcp_token_result
+  failed_when:
+    - mcp_token_result.rc != 0
+    - "'already exists' not in mcp_token_result.stderr"
+  changed_when: mcp_token_result.rc == 0
+
+- name: Print MCP token result
+  ansible.builtin.debug:
+    msg: "{{ mcp_token_result.stdout_lines | default(['Token already exists or created']) }}"
 
 - name: Get final auth pod name
   ansible.builtin.command:
