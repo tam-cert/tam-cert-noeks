@@ -471,14 +471,17 @@
 - name: Apply inference_secret via ConfigMap mount
   ansible.builtin.shell:
     cmd: |
-      cat > /tmp/inference-secret.yaml << EOF
-      kind: inference_secret
-      version: v1
-      metadata:
-        name: grant-skynet-secret
-      spec:
-        value: "{{ skynet_api_key }}"
-      EOF
+      python3 -c "
+      import yaml, os
+      doc = {
+          'kind': 'inference_secret',
+          'version': 'v1',
+          'metadata': {'name': 'grant-skynet-secret'},
+          'spec': {'value': os.environ['SKYNET_API_KEY']}
+      }
+      with open('/tmp/inference-secret.yaml', 'w') as f:
+          yaml.dump(doc, f, default_flow_style=False)
+      "
       kubectl create configmap inference-secret-patch -n teleport \
         --from-file=inference-secret.yaml=/tmp/inference-secret.yaml \
         --dry-run=client -o yaml | kubectl apply -f -
@@ -500,6 +503,7 @@
     executable: /bin/bash
   environment:
     KUBECONFIG: /home/ubuntu/.kube/config
+    SKYNET_API_KEY: "{{ skynet_api_key }}"
   changed_when: true
 
 - name: Verify inference secret applied
