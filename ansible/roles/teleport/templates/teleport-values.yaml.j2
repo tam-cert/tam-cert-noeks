@@ -7,9 +7,8 @@ enterprise: true
 persistence:
   enabled: false
 
-# ACME disabled — Let's Encrypt rate limit reached; cluster uses self-signed cert.
-# Nodes connecting to the proxy must use --insecure (handled via systemd drop-in).
-acme: false
+acme: true
+acmeEmail: grant.voss@goteleport.com
 
 proxyListenerMode: multiplex
 

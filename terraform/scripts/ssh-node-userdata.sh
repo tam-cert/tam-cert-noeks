@@ -89,15 +89,6 @@ grep -q '/cgroup2' /etc/fstab || echo 'none /cgroup2 cgroup2 defaults 0 0' >> /e
 systemctl daemon-reexec
 
 # ── Enable and start Teleport ──────────────────────────────────────────────
-# --insecure is required while the proxy uses a Let's Encrypt staging cert.
-# Remove this drop-in once acmeURI is switched to production.
-mkdir -p /etc/systemd/system/teleport.service.d
-cat > /etc/systemd/system/teleport.service.d/insecure.conf << 'DROPIN'
-[Service]
-ExecStart=
-ExecStart=/usr/local/bin/teleport start --config /etc/teleport.yaml --pid-file=/run/teleport.pid --insecure
-DROPIN
-
 systemctl daemon-reload
 systemctl enable teleport
 systemctl start teleport
