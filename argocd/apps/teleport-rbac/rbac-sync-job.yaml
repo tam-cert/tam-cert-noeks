@@ -99,12 +99,12 @@ spec:
                 login-rule-okta-team.yaml \
                 role-base.yaml \
                 role-auto-approver.yaml \
-                role-okta-base.yaml \
                 role-okta-kube.yaml \
                 role-okta-ssh.yaml \
                 role-okta-ssh-root.yaml \
                 role-okta-reviewer.yaml \
                 role-mcp-ollama-tools.yaml \
+                role-okta-base.yaml \
                 access-monitoring-rule-okta-ssh.yaml \
                 inference-model.yaml \
                 inference-policy.yaml; do
