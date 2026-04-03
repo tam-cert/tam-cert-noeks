@@ -620,3 +620,93 @@ spec:
 - name: Show ArgoCD pods
   ansible.builtin.debug:
     msg: "{{ argocd_pods.stdout_lines }}"
+
+# ── Deploy teleport-kube-agent for app_service ────────────────────────────────
+# The teleport-cluster chart (auth+proxy) does not run app_service.
+# A separate teleport-kube-agent deployment is required to proxy apps like ArgoCD.
+# Uses Kubernetes join method — no static token needed since agent is in-cluster.
+
+- name: Create Kubernetes join token for app agent
+  ansible.builtin.copy:
+    dest: /tmp/app-agent-token.yaml
+    mode: "0600"
+    content: |
+      kind: token
+      version: v2
+      metadata:
+        name: teleport-app-agent
+        expires: "2050-01-01T00:00:00Z"
+      spec:
+        roles: [App]
+        join_method: kubernetes
+        kubernetes:
+          type: in_cluster
+          allow:
+            - service_account: "teleport:teleport-agent"
+
+- name: Apply app agent join token via ConfigMap mount
+  ansible.builtin.shell:
+    cmd: |
+      kubectl create configmap app-agent-token -n teleport \
+        --from-file=app-agent-token.yaml=/tmp/app-agent-token.yaml \
+        --dry-run=client -o yaml | kubectl apply -f -
+      kubectl patch deployment teleport-auth -n teleport --type=json -p='[
+        {"op":"add","path":"/spec/template/spec/volumes/-","value":{"name":"app-agent-token","configMap":{"name":"app-agent-token"}}},
+        {"op":"add","path":"/spec/template/spec/containers/0/volumeMounts/-","value":{"name":"app-agent-token","mountPath":"/tmp/app-agent-token","readOnly":true}}
+      ]'
+      kubectl rollout status deployment/teleport-auth -n teleport --timeout=120s
+      AUTH_POD=$(kubectl get pod -n teleport -l app.kubernetes.io/component=auth -o jsonpath='{.items[0].metadata.name}')
+      kubectl exec -n teleport $AUTH_POD -- tctl create -f /tmp/app-agent-token/app-agent-token.yaml
+      VOL_IDX=$(kubectl get deployment teleport-auth -n teleport \
+        -o jsonpath='{range .spec.template.spec.volumes[*]}{.name}{"\n"}{end}' | \
+        awk '/^app-agent-token$/{print NR-1; exit}')
+      MOUNT_IDX=$(kubectl get deployment teleport-auth -n teleport \
+        -o jsonpath='{range .spec.template.spec.containers[0].volumeMounts[*]}{.name}{"\n"}{end}' | \
+        awk '/^app-agent-token$/{print NR-1; exit}')
+      kubectl patch deployment teleport-auth -n teleport --type=json \
+        -p="[{\"op\":\"remove\",\"path\":\"/spec/template/spec/containers/0/volumeMounts/${MOUNT_IDX}\"},{\"op\":\"remove\",\"path\":\"/spec/template/spec/volumes/${VOL_IDX}\"}]"
+      kubectl delete configmap app-agent-token -n teleport
+      rm -f /tmp/app-agent-token.yaml
+    executable: /bin/bash
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  register: agent_token_result
+  failed_when:
+    - agent_token_result.rc != 0
+    - "'already exists' not in agent_token_result.stderr"
+  changed_when: true
+
+- name: Deploy teleport-kube-agent for app_service
+  ansible.builtin.command:
+    cmd: >
+      helm upgrade --install teleport-agent teleport/teleport-kube-agent
+      --namespace teleport
+      --version 18.7.1
+      --set roles=app
+      --set proxyAddr=grant-tam-teleport.gvteleport.com:443
+      --set joinParams.method=kubernetes
+      --set joinParams.tokenName=teleport-app-agent
+      --set apps[0].name=argocd
+      --set apps[0].uri=http://argocd-server.argocd.svc.cluster.local:80
+      --wait --timeout 5m
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  changed_when: true
+
+- name: Verify app agent registered
+  ansible.builtin.shell:
+    cmd: |
+      sleep 10
+      kubectl exec -n teleport \
+        $(kubectl get pod -n teleport -l app.kubernetes.io/component=auth -o jsonpath='{.items[0].metadata.name}') \
+        -- tctl get app_server | grep -A2 "argocd"
+    executable: /bin/bash
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  register: agent_verify
+  changed_when: false
+  failed_when: false
+
+- name: Print app agent status
+  ansible.builtin.debug:
+    msg: "{{ agent_verify.stdout_lines | default(['Check app_server manually']) }}"
