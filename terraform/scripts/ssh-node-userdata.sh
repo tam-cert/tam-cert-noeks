@@ -64,11 +64,29 @@ ssh_service:
     team: okta-teleport-users
     env: demo
     node: ssh-node-1
+  enhanced_recording:
+    enabled: true
+    command_buffer_size: 8
+    disk_buffer_size: 300
+    network_buffer_size: 8
+    cgroup_path: /cgroup2
   commands:
     - name: hostname
       command: [hostname]
       period: 1m0s
 TELEPORT_CFG
+
+# ── Mount cgroupv2 for BPF enhanced session recording ─────────────────────
+mkdir -p /cgroup2
+mount -t cgroup2 none /cgroup2 || true
+
+# Add persistent mount to fstab if not already present
+grep -q '/cgroup2' /etc/fstab || echo 'none /cgroup2 cgroup2 defaults 0 0' >> /etc/fstab
+
+# Re-exec systemd so it picks up the new cgroup2 mount before Teleport starts.
+# Without this, systemd fails to create the Teleport service cgroup after the
+# new mount is added, causing teleport.service to exit with status=219/CGROUP.
+systemctl daemon-reexec
 
 # ── Enable and start Teleport ──────────────────────────────────────────────
 # --insecure is required while the proxy uses a Let's Encrypt staging cert.
