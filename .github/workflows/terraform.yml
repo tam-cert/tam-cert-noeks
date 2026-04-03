@@ -93,6 +93,7 @@ jobs:
             -var="okta_metadata_url=${{ secrets.OKTA_METADATA_URL }}" \
             -var="okta_groups_editor=${{ secrets.OKTA_GROUPS_EDITOR }}" \
             -var="okta_groups_access=${{ secrets.OKTA_GROUPS_ACCESS }}" \
+            -var="skynet_api_key=${{ secrets.SKYNET_API_KEY }}" \
             -var="github_repo=https://raw.githubusercontent.com/${{ github.repository }}/main" \
             -detailed-exitcode \
             -out=tfplan \
@@ -294,4 +295,5 @@ jobs:
             -var="okta_metadata_url=${{ secrets.OKTA_METADATA_URL }}" \
             -var="okta_groups_editor=${{ secrets.OKTA_GROUPS_EDITOR }}" \
             -var="okta_groups_access=${{ secrets.OKTA_GROUPS_ACCESS }}" \
+            -var="skynet_api_key=${{ secrets.SKYNET_API_KEY }}" \
             -var="github_repo=https://raw.githubusercontent.com/${{ github.repository }}/main"

@@ -452,7 +452,70 @@
   ansible.builtin.debug:
     msg: "{{ saml_verify.stdout_lines }}"
 
-# ── Verify ────────────────────────────────────────────────────────────────────
+# ── Apply AI inference secret ─────────────────────────────────────────────────
+# The inference_secret contains the Skynet API key which cannot be committed
+# to the repo. Applied here (after ArgoCD has applied the inference_model which
+# references it) using the SKYNET_API_KEY value from the environment.
+
+- name: Source teleport-env for skynet API key
+  ansible.builtin.shell:
+    cmd: source /home/ubuntu/.teleport-env && env
+    executable: /bin/bash
+  register: teleport_env_skynet
+  changed_when: false
+
+- name: Set skynet API key fact
+  ansible.builtin.set_fact:
+    skynet_api_key: "{{ teleport_env_skynet.stdout | regex_search('SKYNET_API_KEY=(.+)', '\\1') | first }}"
+
+- name: Apply inference_secret via ConfigMap mount
+  ansible.builtin.shell:
+    cmd: |
+      cat > /tmp/inference-secret.yaml << EOF
+      kind: inference_secret
+      version: v1
+      metadata:
+        name: grant-skynet-secret
+      spec:
+        value: "{{ skynet_api_key }}"
+      EOF
+      kubectl create configmap inference-secret-patch -n teleport \
+        --from-file=inference-secret.yaml=/tmp/inference-secret.yaml \
+        --dry-run=client -o yaml | kubectl apply -f -
+      kubectl patch deployment teleport-auth -n teleport --type=json -p='[
+        {"op":"add","path":"/spec/template/spec/volumes/-","value":{"name":"inf-secret","configMap":{"name":"inference-secret-patch"}}},
+        {"op":"add","path":"/spec/template/spec/containers/0/volumeMounts/-","value":{"name":"inf-secret","mountPath":"/tmp/inf-secret","readOnly":true}}
+      ]'
+      kubectl rollout status deployment/teleport-auth -n teleport --timeout=120s
+      AUTH_POD=$(kubectl get pod -n teleport -l app.kubernetes.io/component=auth -o jsonpath='{.items[0].metadata.name}')
+      kubectl exec -n teleport $AUTH_POD -- tctl create -f /tmp/inf-secret/inference-secret.yaml
+      MOUNT_IDX=$(kubectl get deployment teleport-auth -n teleport -o json | \
+        python3 -c "import json,sys; d=json.load(sys.stdin); mounts=d['spec']['template']['spec']['containers'][0].get('volumeMounts',[]); idxs=[str(i) for i,m in enumerate(mounts) if m['name']=='inf-secret']; print(idxs[0] if idxs else '')")
+      VOL_IDX=$(kubectl get deployment teleport-auth -n teleport -o json | \
+        python3 -c "import json,sys; d=json.load(sys.stdin); vols=d['spec']['template']['spec'].get('volumes',[]); idxs=[str(i) for i,v in enumerate(vols) if v['name']=='inf-secret']; print(idxs[0] if idxs else '')")
+      kubectl patch deployment teleport-auth -n teleport --type=json \
+        -p="[{\"op\":\"remove\",\"path\":\"/spec/template/spec/containers/0/volumeMounts/${MOUNT_IDX}\"},{\"op\":\"remove\",\"path\":\"/spec/template/spec/volumes/${VOL_IDX}\"}]"
+      kubectl delete configmap inference-secret-patch -n teleport
+      rm /tmp/inference-secret.yaml
+    executable: /bin/bash
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  changed_when: true
+
+- name: Verify inference secret applied
+  ansible.builtin.shell:
+    cmd: |
+      AUTH_POD=$(kubectl get pod -n teleport -l app.kubernetes.io/component=auth -o jsonpath='{.items[0].metadata.name}')
+      kubectl exec -n teleport $AUTH_POD -- tctl get inference_secret/grant-skynet-secret
+    executable: /bin/bash
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  register: inf_secret_verify
+  changed_when: false
+
+- name: Print inference secret status
+  ansible.builtin.debug:
+    msg: "{{ inf_secret_verify.stdout_lines }}"
 
 - name: Get final auth pod name
   ansible.builtin.command:

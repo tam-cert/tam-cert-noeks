@@ -288,3 +288,24 @@ data:
       name: grant-tam-teleport.gvteleport.com
       labels:
         env: platform
+
+  inference-model.yaml: |
+    kind: inference_model
+    version: v1
+    metadata:
+      name: skynet-gemma
+    spec:
+      openai:
+        api_key_secret_ref: grant-skynet-secret
+        base_url: https://skynet.gvteleport.com:443/api
+        openai_model_id: gemma3:4b
+
+  inference-policy.yaml: |
+    kind: inference_policy
+    version: v1
+    metadata:
+      name: skynet-gemma-policy
+    spec:
+      kinds:
+        - ssh
+      model: skynet-gemma

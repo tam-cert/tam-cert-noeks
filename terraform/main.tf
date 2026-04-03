@@ -54,6 +54,11 @@ variable "okta_groups_access" {
   description = "Okta group name mapped to Teleport access role"
 }
 
+variable "skynet_api_key" {
+  description = "API key for the Skynet inference endpoint (AI session summary)"
+  sensitive   = true
+}
+
 # ─── IAM Role for EC2 instances ──────────────────────────────────────────────
 
 resource "aws_iam_role" "ec2" {
@@ -311,6 +316,7 @@ locals {
     printf 'export OKTA_METADATA_URL=%s\n' "${var.okta_metadata_url}" >> /home/ubuntu/.teleport-env
     printf 'export OKTA_GROUPS_EDITOR=%s\n' "${var.okta_groups_editor}" >> /home/ubuntu/.teleport-env
     printf 'export OKTA_GROUPS_ACCESS=%s\n' "${var.okta_groups_access}" >> /home/ubuntu/.teleport-env
+    printf 'export SKYNET_API_KEY=%s\n' "${var.skynet_api_key}" >> /home/ubuntu/.teleport-env
     printf 'export GITHUB_REPOSITORY=grantvoss-teleport/tam-cert-noeks\n' >> /home/ubuntu/.teleport-env
     printf "export POSTGRES_ADMIN_PASSWORD='%s'\n" "${random_password.postgres_admin.result}" >> /home/ubuntu/.teleport-env
     printf "export ACCESS_GRAPH_DB_PASSWORD='%s'\n" "${random_password.access_graph_db.result}" >> /home/ubuntu/.teleport-env

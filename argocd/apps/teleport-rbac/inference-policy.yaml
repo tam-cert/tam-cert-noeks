@@ -1,0 +1,8 @@
+kind: inference_policy
+version: v1
+metadata:
+  name: skynet-gemma-policy
+spec:
+  kinds:
+    - ssh
+  model: skynet-gemma

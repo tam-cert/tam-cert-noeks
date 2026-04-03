@@ -1,0 +1,9 @@
+kind: inference_model
+version: v1
+metadata:
+  name: skynet-gemma
+spec:
+  openai:
+    api_key_secret_ref: grant-skynet-secret
+    base_url: https://skynet.gvteleport.com:443/api
+    openai_model_id: gemma3:4b
