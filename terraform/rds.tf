@@ -218,38 +218,14 @@ resource "aws_s3_bucket_lifecycle_configuration" "identity_activity_transient" {
   }
 }
 
-# ── AWS Glue catalog database + table ─────────────────────────────────────────
+# ── AWS Glue catalog database ─────────────────────────────────────────────────
+# Only the database is created here — Access Graph creates and manages the table
+# schema itself on first startup. Pre-creating the table causes Athena query
+# failures due to empty/mismatched column definitions.
 
 resource "aws_glue_catalog_database" "identity_activity" {
   name        = "${var.training_prefix}-identity-activity"
   description = "Teleport Identity Activity Center audit event catalog"
-}
-
-resource "aws_glue_catalog_table" "identity_activity" {
-  name          = "${var.training_prefix}-audit-events"
-  database_name = aws_glue_catalog_database.identity_activity.name
-  description   = "Teleport audit events in Parquet format"
-
-  table_type = "EXTERNAL_TABLE"
-
-  parameters = {
-    "classification"            = "parquet"
-    "parquet.compress"          = "SNAPPY"
-    "projection.enabled"        = "false"
-  }
-
-  storage_descriptor {
-    location      = "s3://${aws_s3_bucket.identity_activity_long.bucket}/data/"
-    input_format  = "org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat"
-    output_format = "org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat"
-
-    ser_de_info {
-      serialization_library = "org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe"
-      parameters = {
-        "serialization.format" = "1"
-      }
-    }
-  }
 }
 
 # ── Amazon Athena workgroup ───────────────────────────────────────────────────
@@ -322,7 +298,9 @@ resource "aws_iam_role_policy" "identity_activity" {
           "glue:GetPartitions",
           "glue:BatchCreatePartition",
           "glue:CreatePartition",
-          "glue:UpdateTable"
+          "glue:CreateTable",
+          "glue:UpdateTable",
+          "glue:DeleteTable"
         ]
         Resource = [
           "arn:aws:glue:us-west-2:${data.aws_caller_identity.current.account_id}:catalog",
