@@ -88,7 +88,7 @@ data:
           - ubuntu
           - ec2-user
         node_labels:
-          team: "{{internal.team}}"
+          team: '*'
         host_groups: []
         host_sudoers: []
       deny:
@@ -120,7 +120,7 @@ data:
           - ec2-user
           - root
         node_labels:
-          team: "{{internal.team}}"
+          team: '*'
         host_sudoers:
           - "ubuntu ALL=(ALL) NOPASSWD: ALL"
           - "ec2-user ALL=(ALL) NOPASSWD: ALL"
@@ -222,7 +222,7 @@ data:
         logins:
           - ubuntu
         node_labels:
-          team: "{{internal.team}}"
+          team: '*'
         host_groups: []
         host_sudoers: []
       deny:
@@ -253,7 +253,7 @@ data:
           - ubuntu
           - root
         node_labels:
-          team: "{{internal.team}}"
+          team: '*'
         host_sudoers:
           - "ubuntu ALL=(ALL) NOPASSWD: ALL"
       deny: {}
